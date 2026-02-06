@@ -1,0 +1,23 @@
+name: kita_hack_app
+description: "recordItemProject."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.8
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  image_picker: ^1.0.8 # Added image_picker dependency
+  google_mlkit_text_recognition: ^0.14.0
+  google_mlkit_image_labeling: ^0.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
