@@ -5,14 +5,11 @@ import 'package:image_picker/image_picker.dart';
 import 'services/ml_ocr.dart';
 import 'services/image_labeler.dart';
 
-
-// Main entry point of the app
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const KitaHackApp());
 }
 
-// Root widget of the application
 class KitaHackApp extends StatelessWidget {
   const KitaHackApp({super.key});
 
@@ -83,8 +80,14 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final ImagePicker _picker = ImagePicker();
   String _selectedCategory = 'Total Items';
+  final labeler = ImageLabelerService();
 
-  // Data stores
+  @override
+  void initState() {
+    super.initState();
+    labeler.initialize();
+  }
+
   final List<GroceryItem> _allItems = [
     GroceryItem(name: 'Organic Bananas', category: 'Fruit', quantity: 5, expiryDate: DateTime.now().add(const Duration(days: 2)), addedDate: DateTime.now()),
     GroceryItem(name: 'Fresh Milk', category: 'Dairy', quantity: 1, expiryDate: DateTime.now().add(const Duration(days: 5)), addedDate: DateTime.now().subtract(const Duration(days: 1))),
@@ -107,19 +110,13 @@ class _HomePageState extends State<HomePage> {
         ]),
   ];
 
-  // --- Core Logic Methods ---
-
   Future<void> _generateAndSaveRecipes() async {
     _showLoadingDialog('Generating Recipes with AI...');
-
     final List<Recipe> suggestedRecipes = await _simulateRecipeGeneration();
     if (!mounted) return;
-
-    Navigator.of(context, rootNavigator: true).pop(); // Close loading dialog
-
+    Navigator.of(context, rootNavigator: true).pop();
     final newRecipe = await showDialog<Recipe>(
         context: context, builder: (context) => RecipeSuggestionDialog(suggestedRecipes: suggestedRecipes));
-
     if (newRecipe != null) {
       setState(() {
         _savedRecipes.add(newRecipe);
@@ -138,60 +135,42 @@ class _HomePageState extends State<HomePage> {
     ];
   }
 
-  // --- AI / Camera Scan Logic ---
-
+  // --- AI SCAN LOGIC ---
   Future<void> _openCameraAndAddNewItem() async {
     try {
-      // Pick image from camera
       final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
       if (photo == null || !mounted) return;
 
-      _showLoadingDialog('Analyzing Image with AI...');
+      _showLoadingDialog('Analyzing Image with Smart AI...');
 
-      // Initialize AI services
       final mlOcr = MlOcr();
-      final labeler = ImageLabelerService();
-
-      // Extract text (for expiry date)
+      
       final text = await mlOcr.extractText(File(photo.path));
-
-      // Label image (detect item)
-      final labels = await labeler.labelImage(File(photo.path));
-
-      // Parse expiry date
+      final analysis = await labeler.analyzeImage(File(photo.path), text);
       DateTime expiryDate = parseExpiryDate(text) ?? DateTime.now().add(const Duration(days: 7));
 
-      // Map label to category
-      final category = mapLabelsToCategory(labels);
-
-      // Dispose services to free memory
       mlOcr.dispose();
-      labeler.dispose();
 
-      // Prepare AI result safely
-      final Map<String, String> aiResult = {
-        'name': labels.isNotEmpty ? labels.first : 'Unknown Item',
-        'category': category,
-        'expiryDate': expiryDate.toIso8601String(),
-      };
-
-      // Close loading dialog
       Navigator.of(context, rootNavigator: true).pop();
 
-      // Navigate to AddItemPage with AI result
       final newItem = await Navigator.push<GroceryItem>(
         context,
         MaterialPageRoute(
           builder: (context) => AddItemPage(
-            initialName: aiResult['name']!,
-            initialCategory: aiResult['category']!,
+            initialName: analysis.name,
+            initialCategory: analysis.category,
+            suggestions: analysis.suggestions,
             imageFile: File(photo.path),
+            initialExpiry: expiryDate,
           ),
         ),
       );
 
-      // Save the new item if returned
       if (newItem != null) {
+        // --- THE LEARNING TRIGGER ---
+        // Teach the AI that these visual patterns = this name
+        await labeler.teachAI(analysis.rawLabels, newItem.name);
+
         setState(() {
           _allItems.insert(0, newItem);
           _selectedCategory = 'Total Items';
@@ -199,13 +178,10 @@ class _HomePageState extends State<HomePage> {
       }
     } catch (e) {
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('AI scan failed: $e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('AI scan failed: $e')));
     }
   }
 
-// --- Helper: Parse expiry date from OCR text ---
   DateTime? parseExpiryDate(String text) {
     final regex = RegExp(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})');
     final match = regex.firstMatch(text);
@@ -217,36 +193,6 @@ class _HomePageState extends State<HomePage> {
       return DateTime(year, month, day);
     }
     return null;
-  }
-
-// --- Helper: Map AI labels to categories ---
-  String mapLabelsToCategory(List<String> labels) {
-    if (labels.isEmpty) return 'Other';
-    final label = labels.first.toLowerCase();
-
-    // Improved mapping: more comprehensive
-    const fruit = ['apple', 'banana', 'avocado', 'orange', 'mango', 'grape'];
-    const dairy = ['milk', 'cheese', 'eggs', 'yogurt', 'butter'];
-    const pantry = ['flour', 'rice', 'bread', 'sugar', 'salt', 'oil'];
-
-    if (fruit.contains(label)) return 'Fruit';
-    if (dairy.contains(label)) return 'Dairy';
-    if (pantry.contains(label)) return 'Pantry';
-    return 'Other';
-  }
-
-
-
-
-  Future<Map<String, String>> _simulateAiAnalysis() async {
-    await Future.delayed(const Duration(seconds: 2));
-    final List<Map<String, String>> possibleItems = [
-      {'name': 'Apple', 'category': 'Fruit'},
-      {'name': 'Tomato', 'category': 'Vegetable'},
-      {'name': 'Carton of Eggs', 'category': 'Dairy & Eggs'},
-      {'name': 'Broccoli', 'category': 'Vegetable'},
-    ];
-    return possibleItems[Random().nextInt(possibleItems.length)];
   }
 
   void _showLoadingDialog(String message) {
@@ -278,30 +224,21 @@ class _HomePageState extends State<HomePage> {
       context,
       MaterialPageRoute(builder: (context) => RecipeDetailPage(recipe: recipe, allItems: _allItems)),
     );
-
     if (result != null && result['action'] == 'completed') {
       setState(() {
-        // Remove the recipe
         _savedRecipes.removeWhere((r) => r.id == recipe.id);
-
-        // Deduct ingredients
         final ownedItemNames = _allItems.map((item) => item.name.toLowerCase()).toSet();
         final usedIngredients = recipe.ingredients.where((ing) => ownedItemNames.contains(ing.toLowerCase()));
-
         for (final ingredientName in usedIngredients) {
           final itemIndex = _allItems.indexWhere((item) => item.name.toLowerCase() == ingredientName.toLowerCase());
           if (itemIndex != -1) {
             _allItems[itemIndex].quantity--;
           }
         }
-
-        // Remove items with zero quantity
         _allItems.removeWhere((item) => item.quantity <= 0);
       });
     }
   }
-
-  // --- Build Methods ---
 
   @override
   Widget build(BuildContext context) {
@@ -309,10 +246,7 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(title: const Text('AI Smart Grocery & Food Waste Reduction App')),
       body: Column(children: [
         _buildTopActionBar(),
-        if (_selectedCategory != 'Recipe Suggest')
-          _buildItemView()
-        else
-          _buildRecipeView(),
+        if (_selectedCategory != 'Recipe Suggest') _buildItemView() else _buildRecipeView(),
       ]),
       floatingActionButton: FloatingActionButton(
         onPressed: _openCameraAndAddNewItem,
@@ -355,9 +289,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildRecipeList() {
-    if (_savedRecipes.isEmpty) {
-      return const Center(child: Text('No saved recipes yet. Generate some with AI!'));
-    }
+    if (_savedRecipes.isEmpty) return const Center(child: Text('No saved recipes yet. Generate some with AI!'));
     return ListView.builder(itemCount: _savedRecipes.length, itemBuilder: (context, index) {
       final recipe = _savedRecipes[index];
       return Card(margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0), elevation: 2,
@@ -379,6 +311,7 @@ class _HomePageState extends State<HomePage> {
     filteredList.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return filteredList;
   }
+
   Widget _buildTopActionBar() {
     const categories = ['Total Items', 'Recently Added', 'Almost Expired', 'Expired', 'Recipe Suggest'];
     return Container(height: 60, decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Colors.grey[300]!))),
@@ -393,11 +326,13 @@ class _HomePageState extends State<HomePage> {
       }).toList()),
     );
   }
+
   Widget _buildContentHeader(int count, {String? title}) {
     return Padding(padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
       child: Row(children: [Text(title ?? '$_selectedCategory ($count)', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold))]),
     );
   }
+
   Widget _buildContentArea(List<GroceryItem> items) {
     if (items.isEmpty) return const Center(child: Text('No items in this category.'));
     return ListView.builder(itemCount: items.length, itemBuilder: (context, index) {
@@ -413,12 +348,10 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-
 // --- RECIPE SUGGESTION DIALOG ---
 class RecipeSuggestionDialog extends StatelessWidget {
   final List<Recipe> suggestedRecipes;
   const RecipeSuggestionDialog({super.key, required this.suggestedRecipes});
-
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -437,27 +370,23 @@ class RecipeSuggestionDialog extends StatelessWidget {
 class RecipeDetailPage extends StatelessWidget {
   final Recipe recipe;
   final List<GroceryItem> allItems;
-
   const RecipeDetailPage({super.key, required this.recipe, required this.allItems});
-
   void _showDoneConfirmationDialog(BuildContext context) {
     showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Complete Recipe?'),
         content: const Text('This will remove the recipe from your saved list and deduct the used ingredients from your inventory.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
           FilledButton(onPressed: () {
-            Navigator.of(ctx).pop(); // Close dialog
-            Navigator.of(context).pop({'action': 'completed'}); // Pop detail page with completed action
+            Navigator.of(ctx).pop();
+            Navigator.of(context).pop({'action': 'completed'});
           }, child: const Text('Complete')),
         ]));
   }
-
   @override
   Widget build(BuildContext context) {
     final ownedItemNames = allItems.map((item) => item.name.toLowerCase()).toSet();
     final ownedIngredients = recipe.ingredients.where((ing) => ownedItemNames.contains(ing.toLowerCase())).toList();
     final missingIngredients = recipe.ingredients.where((ing) => !ownedItemNames.contains(ing.toLowerCase())).toList();
-
     return Scaffold(
       appBar: AppBar(title: Text(recipe.name)),
       body: Column(
@@ -483,7 +412,6 @@ class RecipeDetailPage extends StatelessWidget {
                   )),
             ])),
           ),
-          // DONE BUTTON AREA
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: FilledButton.icon(
@@ -497,7 +425,6 @@ class RecipeDetailPage extends StatelessWidget {
       ),
     );
   }
-
   Widget _buildSectionHeader(String title) => Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold));
   Widget _buildIngredientSubHeader(String title) => Padding(padding: const EdgeInsets.symmetric(vertical: 8.0), child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black54)));
   Widget _buildIngredientTile(String name, {required bool have}) => ListTile(
@@ -508,10 +435,104 @@ class RecipeDetailPage extends StatelessWidget {
 }
 
 // --- OTHER PAGES (RESTORED) ---
-
 class ItemDetailPage extends StatefulWidget {final GroceryItem item; const ItemDetailPage({super.key, required this.item}); @override State<ItemDetailPage> createState() => _ItemDetailPageState();}
 class _ItemDetailPageState extends State<ItemDetailPage> { late GroceryItem currentItem; @override void initState() { super.initState(); currentItem = widget.item;} String _getExpiryStatus(GroceryItem item) { if (item.isExpired) return 'Expired'; if (item.isAlmostExpired) return 'Expires Soon'; return 'Fresh';} void _showDeleteConfirmationDialog() { showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Delete Item?'), content: Text('Are you sure you want to delete "${currentItem.name}"?'), actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')), FilledButton(onPressed: () {Navigator.of(ctx).pop(); Navigator.of(context).pop({'action': 'deleted'});}, style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700), child: const Text('Delete'))]));} void _navigateToEditPage() async { final updatedItem = await Navigator.push(context, MaterialPageRoute(builder: (context) => EditItemPage(item: currentItem))); if (updatedItem != null) setState(() => currentItem = updatedItem);} @override Widget build(BuildContext context) { return WillPopScope(onWillPop: () async { Navigator.of(context).pop({'action': 'updated', 'item': currentItem}); return false;}, child: Scaffold(appBar: AppBar(title: Text(currentItem.name)), body: SingleChildScrollView(padding: const EdgeInsets.all(16.0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const SizedBox(height: 24), Text('Item Details', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)), const Divider(height: 24), _buildDetailRow('Name', currentItem.name), _buildDetailRow('Category', currentItem.category), _buildDetailRow('Quantity', currentItem.quantity.toString()), _buildDetailRow('Date Added', '${currentItem.addedDate.toLocal()}'.split(' ')[0]), _buildDetailRow('Expiry Date', '${currentItem.expiryDate.toLocal()}'.split(' ')[0]), _buildDetailRow('Status', _getExpiryStatus(currentItem)), const SizedBox(height: 32), SizedBox(width: double.infinity, child: FilledButton.icon(icon: const Icon(Icons.delete_forever), label: const Text('Delete Item'), onPressed: _showDeleteConfirmationDialog, style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700, padding: const EdgeInsets.symmetric(vertical: 12))))])), floatingActionButton: FloatingActionButton(onPressed: _navigateToEditPage, tooltip: 'Edit Item', child: const Icon(Icons.edit))));} Widget _buildDetailRow(String label, String value) { return Padding(padding: const EdgeInsets.symmetric(vertical: 8.0), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), Expanded(child: Text(value, textAlign: TextAlign.end, style: const TextStyle(fontSize: 16)))]));}}
 class EditItemPage extends StatefulWidget {final GroceryItem item; const EditItemPage({super.key, required this.item}); @override State<EditItemPage> createState() => _EditItemPageState();}
 class _EditItemPageState extends State<EditItemPage> { final _formKey = GlobalKey<FormState>(); late TextEditingController _nameController, _categoryController, _quantityController; late DateTime _expiryDate; @override void initState() { super.initState(); _nameController = TextEditingController(text: widget.item.name); _categoryController = TextEditingController(text: widget.item.category); _quantityController = TextEditingController(text: widget.item.quantity.toString()); _expiryDate = widget.item.expiryDate;} Future<void> _selectDate() async { final picked = await showDatePicker(context: context, initialDate: _expiryDate, firstDate: DateTime(2000), lastDate: DateTime(2101)); if (picked != null && picked != _expiryDate) setState(() => _expiryDate = picked);} void _saveForm() { if (_formKey.currentState!.validate()) { widget.item.name = _nameController.text; widget.item.category = _categoryController.text; widget.item.quantity = int.tryParse(_quantityController.text) ?? 1; widget.item.expiryDate = _expiryDate; Navigator.of(context).pop(widget.item);}} @override Widget build(BuildContext context) { return Scaffold(appBar: AppBar(title: const Text('Edit Item'), actions: [IconButton(icon: const Icon(Icons.save), onPressed: _saveForm, tooltip: 'Save Changes')]), body: SingleChildScrollView(padding: const EdgeInsets.all(16.0), child: Form(key: _formKey, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'Item Name', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Please enter a name' : null), const SizedBox(height: 16), TextFormField(controller: _categoryController, decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Please enter a category' : null), const SizedBox(height: 16), TextFormField(controller: _quantityController, decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => int.tryParse(v!) == null ? 'Please enter a valid number' : null), const SizedBox(height: 24), Row(children: [Expanded(child: Text('Expires on: ${_expiryDate.toLocal()}'.split(' ')[0], style: const TextStyle(fontSize: 16))), ElevatedButton.icon(onPressed: _selectDate, icon: const Icon(Icons.calendar_today), label: const Text('Change Date'))])]))));}}
-class AddItemPage extends StatefulWidget {final String initialName; final String initialCategory; final File imageFile; const AddItemPage({super.key, required this.initialName, required this.initialCategory, required this.imageFile}); @override State<AddItemPage> createState() => _AddItemPageState();}
-class _AddItemPageState extends State<AddItemPage> { final _formKey = GlobalKey<FormState>(); late TextEditingController _nameController, _categoryController, _quantityController; late DateTime _expiryDate; @override void initState() { super.initState(); _nameController = TextEditingController(text: widget.initialName); _categoryController = TextEditingController(text: widget.initialCategory); _quantityController = TextEditingController(text: '1'); _expiryDate = DateTime.now().add(const Duration(days: 7));} Future<void> _selectDate() async { final picked = await showDatePicker(context: context, initialDate: _expiryDate, firstDate: DateTime.now(), lastDate: DateTime(2101)); if (picked != null && picked != _expiryDate) setState(() => _expiryDate = picked);} void _saveForm() { if (_formKey.currentState!.validate()) { final newItem = GroceryItem(name: _nameController.text, category: _categoryController.text, quantity: int.tryParse(_quantityController.text) ?? 1, expiryDate: _expiryDate, addedDate: DateTime.now(), image: widget.imageFile); Navigator.of(context).pop(newItem);}} @override Widget build(BuildContext context) { return Scaffold(appBar: AppBar(title: const Text('Add New Item'), actions: [IconButton(icon: const Icon(Icons.save), onPressed: _saveForm, tooltip: 'Save Item')]), body: SingleChildScrollView(padding: const EdgeInsets.all(16.0), child: Form(key: _formKey, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Center(child: Image.file(widget.imageFile, height: 200, width: double.infinity, fit: BoxFit.cover)), const SizedBox(height: 24), TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'Item Name', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Please enter a name' : null), const SizedBox(height: 16), TextFormField(controller: _categoryController, decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Please enter a category' : null), const SizedBox(height: 16), TextFormField(controller: _quantityController, decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => int.tryParse(v!) == null ? 'Please enter a valid number' : null), const SizedBox(height: 24), Row(children: [Expanded(child: Text('Expires on: ${_expiryDate.toLocal()}'.split(' ')[0], style: const TextStyle(fontSize: 16))), ElevatedButton.icon(onPressed: _selectDate, icon: const Icon(Icons.calendar_today), label: const Text('Change Date'))]), const SizedBox(height: 32), SizedBox(width: double.infinity, child: FilledButton.icon(icon: const Icon(Icons.add), label: const Text('Add Item to Inventory'), onPressed: _saveForm, style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12))))]))));}}
+
+class AddItemPage extends StatefulWidget {
+  final String initialName;
+  final String initialCategory;
+  final List<String> suggestions;
+  final File imageFile;
+  final DateTime initialExpiry;
+
+  const AddItemPage({
+    super.key,
+    required this.initialName,
+    required this.initialCategory,
+    required this.suggestions,
+    required this.imageFile,
+    required this.initialExpiry,
+  });
+
+  @override
+  State<AddItemPage> createState() => _AddItemPageState();
+}
+
+class _AddItemPageState extends State<AddItemPage> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController, _categoryController, _quantityController;
+  late DateTime _expiryDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+    _categoryController = TextEditingController(text: widget.initialCategory);
+    _quantityController = TextEditingController(text: '1');
+    _expiryDate = widget.initialExpiry;
+  }
+
+  Future<void> _selectDate() async {
+    final picked = await showDatePicker(
+        context: context, initialDate: _expiryDate, firstDate: DateTime.now(), lastDate: DateTime(2101));
+    if (picked != null && picked != _expiryDate) setState(() => _expiryDate = picked);
+  }
+
+  void _saveForm() {
+    if (_formKey.currentState!.validate()) {
+      final newItem = GroceryItem(
+          name: _nameController.text,
+          category: _categoryController.text,
+          quantity: int.tryParse(_quantityController.text) ?? 1,
+          expiryDate: _expiryDate,
+          addedDate: DateTime.now(),
+          image: widget.imageFile);
+      Navigator.of(context).pop(newItem);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add New Item'), actions: [IconButton(icon: const Icon(Icons.save), onPressed: _saveForm, tooltip: 'Save Item')]),
+      body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Form(
+              key: _formKey,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Center(child: Image.file(widget.imageFile, height: 200, width: double.infinity, fit: BoxFit.cover)),
+                const SizedBox(height: 24),
+                
+                // --- DYNAMIC AI SUGGESTION BAR ---
+                if (widget.suggestions.isNotEmpty) ...[
+                  const Text('AI Detected (Tap to pick):', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8.0,
+                    children: widget.suggestions.map((s) => ActionChip(
+                      label: Text(s),
+                      onPressed: () => setState(() => _nameController.text = s),
+                      backgroundColor: Colors.green.shade50,
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+
+                TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'Item Name', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Please enter a name' : null),
+                const SizedBox(height: 16),
+                TextFormField(controller: _categoryController, decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Please enter a category' : null),
+                const SizedBox(height: 16),
+                TextFormField(controller: _quantityController, decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => int.tryParse(v!) == null ? 'Please enter a valid number' : null),
+                const SizedBox(height: 24),
+                Row(children: [
+                  Expanded(child: Text('Expires on: ${_expiryDate.toLocal()}'.split(' ')[0], style: const TextStyle(fontSize: 16))),
+                  ElevatedButton.icon(onPressed: _selectDate, icon: const Icon(Icons.calendar_today), label: const Text('Change Date'))
+                ]),
+                const SizedBox(height: 32),
+                SizedBox(width: double.infinity, child: FilledButton.icon(icon: const Icon(Icons.add), label: const Text('Add Item to Inventory'), onPressed: _saveForm, style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12))))
+              ]))),
+    );
+  }
+}
