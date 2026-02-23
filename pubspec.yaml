@@ -15,14 +15,12 @@ dependencies:
   google_mlkit_text_recognition: ^0.15.1
   path_provider: ^2.1.3
   shared_preferences: ^2.2.3
-  google_generative_ai: ^0.4.6 # Added for Gemini AI features
+  google_generative_ai: ^0.4.6
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^6.0.0
+  flutter_lints: ^2.0.0
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/ml/food_model.tflite

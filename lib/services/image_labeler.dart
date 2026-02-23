@@ -1,10 +1,7 @@
 // lib/services/image_labeler.dart
 import 'dart:io';
 import 'dart:convert';
-import 'package:flutter/services.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
-import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DetectionResult {
@@ -18,13 +15,17 @@ class DetectionResult {
 
 class ImageLabelerService {
   ImageLabeler? _labeler;
-  List<String>? _labels;
   Map<String, String> _memory = {};
 
   static const Set<String> _whitelist = {
-    'apple', 'banana', 'orange', 'broccoli', 'cabbage', 'onion', 'milk', 'egg', 'tomato', 
+    // Fruit & Veg
+    'apple', 'banana', 'orange', 'broccoli', 'cabbage', 'onion', 'milk', 'egg', 'tomato',
     'potato', 'carrot', 'cucumber', 'lemon', 'pineapple', 'pepper', 'corn', 'grape',
-    'strawberry', 'mango', 'pear', 'bread', 'cheese', 'yogurt', 'meat', 'fish', 'bok choy'
+    'strawberry', 'mango', 'pear', 'bread', 'cheese', 'yogurt', 'bok choy',
+    // Meat & Protein
+    'chicken', 'fish', 'meat', 'beef', 'mutton', 'lamb', 'pork', 'shrimp', 'prawn',
+    'crab', 'squid', 'duck', 'anchovies', 'salmon', 'tuna', 'ayam', 'ikan', 'daging',
+    'ikan bilis', 'udang'
   };
 
   Future<void> initialize() async {
@@ -34,9 +35,7 @@ class ImageLabelerService {
 
     if (_labeler != null) return;
     try {
-      final modelPath = await _getModelPath('assets/ml/food_model.tflite');
-      _labeler = ImageLabeler(options: LocalLabelerOptions(modelPath: modelPath, confidenceThreshold: 0.05));
-      _labels = _getGroceryLabels();
+      _labeler = ImageLabeler(options: ImageLabelerOptions(confidenceThreshold: 0.4));
     } catch (e) { print('AI Init Error: $e'); }
   }
 
@@ -47,24 +46,36 @@ class ImageLabelerService {
       final Set<String> suggestions = {};
       final String lowerOcr = ocrText.toLowerCase();
 
-      for (var r in results) {
-        if (_memory.containsKey(r.label)) suggestions.add(_memory[r.label]!);
-      }
+      // Priority 1: Check OCR for local BM/EN names (Ayam, Ikan, etc)
       for (var g in _whitelist) {
         if (lowerOcr.contains(g)) suggestions.add(_capitalize(g));
       }
+
+      // Priority 2: Check user-taught memory
       for (var r in results) {
-        int? idx = int.tryParse(r.label);
-        String name = (idx != null && idx < _labels!.length) ? _labels![idx] : r.label;
-        if (_whitelist.any((g) => name.toLowerCase().contains(g))) suggestions.add(_capitalize(name));
+        if (_memory.containsKey(r.label)) suggestions.add(_memory[r.label]!);
       }
 
-      if (suggestions.isEmpty) return DetectionResult(name: 'Scan Grocery', category: 'Other', suggestions: [], rawLabels: results);
+      // Priority 3: Add ML labels that match whitelist
+      for (var r in results) {
+        if (_whitelist.any((g) => r.label.toLowerCase().contains(g))) {
+          suggestions.add(_capitalize(r.label));
+        }
+      }
+
+      if (suggestions.isEmpty) {
+        return DetectionResult(
+          name: results.isNotEmpty ? _capitalize(results.first.label) : (lowerOcr.isNotEmpty ? _capitalize(lowerOcr.split('\n').first) : 'Scan Grocery'),
+          category: _mapToCategory(lowerOcr),
+          suggestions: [],
+          rawLabels: results
+        );
+      }
 
       return DetectionResult(
         name: suggestions.first,
         category: _mapToCategory(suggestions.first),
-        suggestions: suggestions.skip(1).take(8).toList(),
+        suggestions: suggestions.skip(1).take(5).toList(),
         rawLabels: results,
       );
     } catch (e) { return DetectionResult(name: 'Error', category: 'Other', suggestions: [], rawLabels: []); }
@@ -79,29 +90,14 @@ class ImageLabelerService {
 
   String _mapToCategory(String name) {
     final n = name.toLowerCase();
-    if (RegExp(r'apple|banana|orange|fruit').hasMatch(n)) return 'Fruit';
-    if (RegExp(r'broccoli|cabbage|onion|veg|cucumber|bok choy').hasMatch(n)) return 'Vegetable';
-    if (RegExp(r'milk|cheese|dairy|egg').hasMatch(n)) return 'Dairy';
+    if (RegExp(r'apple|banana|orange|fruit|grape|mango|pear|nanas|betik|epal|pisang|oren').hasMatch(n)) return 'Fruit';
+    if (RegExp(r'broccoli|cabbage|onion|veg|cucumber|bok choy|tomato|potato|carrot|sawi|kangkung|bayam|kubis|bawang|lobak').hasMatch(n)) return 'Vegetable';
+    if (RegExp(r'milk|cheese|dairy|egg|yogurt|susu|telur').hasMatch(n)) return 'Dairy';
+    if (RegExp(r'chicken|fish|meat|beef|mutton|lamb|pork|shrimp|prawn|crab|squid|duck|anchovies|ayam|ikan|daging|udang|sotong|bilis').hasMatch(n)) return 'Meat & Seafood';
     return 'Other';
   }
 
   String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1).toLowerCase();
-
-  List<String> _getGroceryLabels() {
-    var list = List.generate(1001, (i) => 'Item $i');
-    list[948] = 'Apple'; list[954] = 'Banana'; list[950] = 'Orange';
-    list[938] = 'Broccoli'; list[931] = 'Cabbage'; list[933] = 'Cucumber';
-    list[937] = 'Bok Choy'; list[951] = 'Lemon'; list[928] = 'Bell Pepper';
-    return list;
-  }
-
-  Future<String> _getModelPath(String asset) async {
-    final path = join((await getApplicationSupportDirectory()).path, 'food_model.tflite');
-    final file = File(path);
-    final byteData = await rootBundle.load(asset);
-    await file.writeAsBytes(byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes));
-    return file.path;
-  }
 
   void dispose() => _labeler?.close();
 }
