@@ -18,14 +18,12 @@ class ImageLabelerService {
   Map<String, String> _memory = {};
 
   static const Set<String> _whitelist = {
-    // Fruit & Veg
     'apple', 'banana', 'orange', 'broccoli', 'cabbage', 'onion', 'milk', 'egg', 'tomato',
     'potato', 'carrot', 'cucumber', 'lemon', 'pineapple', 'pepper', 'corn', 'grape',
     'strawberry', 'mango', 'pear', 'bread', 'cheese', 'yogurt', 'bok choy',
-    // Meat & Protein
     'chicken', 'fish', 'meat', 'beef', 'mutton', 'lamb', 'pork', 'shrimp', 'prawn',
     'crab', 'squid', 'duck', 'anchovies', 'salmon', 'tuna', 'ayam', 'ikan', 'daging',
-    'ikan bilis', 'udang'
+    'ikan bilis', 'udang', 'kobis', 'kubis', 'sawi', 'garlic', 'petai', 'betik', 'papaya', 'halia', 'ginger'
   };
 
   Future<void> initialize() async {
@@ -46,17 +44,14 @@ class ImageLabelerService {
       final Set<String> suggestions = {};
       final String lowerOcr = ocrText.toLowerCase();
 
-      // Priority 1: Check OCR for local BM/EN names (Ayam, Ikan, etc)
       for (var g in _whitelist) {
         if (lowerOcr.contains(g)) suggestions.add(_capitalize(g));
       }
 
-      // Priority 2: Check user-taught memory
       for (var r in results) {
         if (_memory.containsKey(r.label)) suggestions.add(_memory[r.label]!);
       }
 
-      // Priority 3: Add ML labels that match whitelist
       for (var r in results) {
         if (_whitelist.any((g) => r.label.toLowerCase().contains(g))) {
           suggestions.add(_capitalize(r.label));
@@ -90,11 +85,17 @@ class ImageLabelerService {
 
   String _mapToCategory(String name) {
     final n = name.toLowerCase();
-    if (RegExp(r'apple|banana|orange|fruit|grape|mango|pear|nanas|betik|epal|pisang|oren').hasMatch(n)) return 'Fruit';
-    if (RegExp(r'broccoli|cabbage|onion|veg|cucumber|bok choy|tomato|potato|carrot|sawi|kangkung|bayam|kubis|bawang|lobak').hasMatch(n)) return 'Vegetable';
-    if (RegExp(r'milk|cheese|dairy|egg|yogurt|susu|telur').hasMatch(n)) return 'Dairy';
-    if (RegExp(r'chicken|fish|meat|beef|mutton|lamb|pork|shrimp|prawn|crab|squid|duck|anchovies|ayam|ikan|daging|udang|sotong|bilis').hasMatch(n)) return 'Meat & Seafood';
-    return 'Other';
+    // Accurate Categorization per User Request:
+    // FRUITS (Including Papaya, Watermelon, Cucumber)
+    if (RegExp(r'apple|banana|orange|fruit|grape|mango|pear|nanas|betik|epal|pisang|oren|papaya|watermelon|tembikai|cucumber|timun').hasMatch(n)) return 'Fruits';
+    // VEGETABLES (Including Bok Choy, Garlic, Onion, Ginger)
+    if (RegExp(r'broccoli|cabbage|kobis|kubis|onion|bawang|veg|bok choy|sawi|tomato|potato|kentang|carrot|lobak|garlic|halia|ginger').hasMatch(n)) return 'Vegetables';
+    // DAIRY
+    if (RegExp(r'milk|susu|cheese|dairy|egg|telur|yogurt').hasMatch(n)) return 'Dairy';
+    // MEAT & SEAFOOD
+    if (RegExp(r'chicken|ayam|fish|ikan|meat|daging|beef|lembu|lamb|kambing|duck|itik|udang|prawn|sotong|bilis').hasMatch(n)) return 'Meat & Seafood';
+
+    return 'Dry/Wet Food';
   }
 
   String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1).toLowerCase();

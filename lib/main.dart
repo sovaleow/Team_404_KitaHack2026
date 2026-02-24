@@ -13,13 +13,12 @@ import 'services/ml_ocr.dart';
 import 'services/image_labeler.dart';
 import 'services/local_recipes.dart';
 
-// --- MAIN ENTRY POINT ---
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await Firebase.initializeApp();
   } catch (e) {
-    debugPrint("Firebase init failed: $e. Make sure you added google-services.json");
+    debugPrint("Firebase init failed: $e");
   }
   await NotificationService.init();
   runApp(const KitaHackApp());
@@ -42,7 +41,6 @@ class KitaHackApp extends StatelessWidget {
   }
 }
 
-// --- AUTH WRAPPER ---
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
   @override
@@ -50,23 +48,25 @@ class AuthWrapper extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        if (!snapshot.hasData || snapshot.data == null) return const LoginPage();
-        return const HomePage();
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        if (snapshot.hasData && snapshot.data != null) {
+          return const HomePage();
+        }
+        return const LoginPage();
       },
     );
   }
 }
 
-// --- LOGIN PAGE ---
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
   @override State<LoginPage> createState() => _LoginPageState();
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _email = TextEditingController();
-  final _password = TextEditingController();
+  final _email = TextEditingController(), _password = TextEditingController();
   bool _isLogin = true;
 
   Future<void> _submit() async {
@@ -83,14 +83,11 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _googleSignIn() async {
     try {
-      // FORCE ACCOUNT SELECTION
-      await GoogleSignIn().signOut(); 
-      
-      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
-      final GoogleSignInAuthentication? googleAuth = await googleUser?.authentication;
-      if (googleAuth != null) {
-        final credential = GoogleAuthProvider.credential(accessToken: googleAuth.accessToken, idToken: googleAuth.idToken);
-        await FirebaseAuth.instance.signInWithCredential(credential);
+      await GoogleSignIn().signOut();
+      final gs = await GoogleSignIn().signIn();
+      final ga = await gs?.authentication;
+      if (ga != null) {
+        await FirebaseAuth.instance.signInWithCredential(GoogleAuthProvider.credential(accessToken: ga.accessToken, idToken: ga.idToken));
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
@@ -122,9 +119,12 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-// --- DATA MODELS ---
 class GroceryItem {
-  String name; String category; int quantity; DateTime expiryDate; final DateTime addedDate; final String? imageUrl; final String id;
+  String name, category, id;
+  int quantity;
+  DateTime expiryDate, addedDate;
+  String? imageUrl;
+
   GroceryItem({required this.name, required this.category, required this.quantity, required this.expiryDate, required this.addedDate, this.imageUrl, required this.id});
 
   Map<String, dynamic> toMap() => {
@@ -132,15 +132,15 @@ class GroceryItem {
   };
 
   factory GroceryItem.fromDoc(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+    final d = doc.data() as Map<String, dynamic>;
     return GroceryItem(
       id: doc.id,
-      name: data['name'],
-      category: data['category'],
-      quantity: data['quantity'],
-      expiryDate: DateTime.parse(data['expiryDate']),
-      addedDate: DateTime.parse(data['addedDate']),
-      imageUrl: data['imageUrl'],
+      name: d['name'],
+      category: d['category'],
+      quantity: d['quantity'] ?? 1,
+      expiryDate: DateTime.parse(d['expiryDate']),
+      addedDate: DateTime.parse(d['addedDate']),
+      imageUrl: d['imageUrl']
     );
   }
 
@@ -148,243 +148,273 @@ class GroceryItem {
   bool get isExpired => expiryDate.isBefore(DateTime.now());
 }
 
-// --- FIREBASE SERVICE ---
 class FirebaseService {
   static final _db = FirebaseFirestore.instance;
   static String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
-  static Stream<List<GroceryItem>> getItems() {
-    if (_uid.isEmpty) return Stream.value([]);
-    return _db.collection('users').doc(_uid).collection('inventory').snapshots().map((snap) => snap.docs.map((doc) => GroceryItem.fromDoc(doc)).toList());
+  static Stream<List<GroceryItem>> getItems() => _db.collection('users').doc(_uid).collection('inventory').snapshots().map((s) => s.docs.map((d) => GroceryItem.fromDoc(d)).toList());
+  static Future<void> addItem(GroceryItem i) async => await _db.collection('users').doc(_uid).collection('inventory').add(i.toMap());
+  static Future<void> updateItem(String id, Map<String, dynamic> data) async => await _db.collection('users').doc(_uid).collection('inventory').doc(id).update(data);
+  static Future<void> deleteItem(String id) async => await _db.collection('users').doc(_uid).collection('inventory').doc(id).delete();
+
+  static Future<void> completeItem(GroceryItem i) async {
+    await _db.collection('users').doc(_uid).collection('stats').add({'name': i.name, 'date': DateTime.now().toIso8601String(), 'category': i.category, 'status': 'used', 'quantity': i.quantity});
+    await deleteItem(i.id);
   }
 
-  static Future<void> addItem(GroceryItem item) async {
-    if (_uid.isEmpty) return;
-    await _db.collection('users').doc(_uid).collection('inventory').add(item.toMap());
+  static Future<void> markAsWasted(GroceryItem i) async {
+    await _db.collection('users').doc(_uid).collection('stats').add({'name': i.name, 'date': DateTime.now().toIso8601String(), 'category': i.category, 'status': 'wasted', 'quantity': i.quantity});
+    await deleteItem(i.id);
   }
 
-  static Future<void> deleteItem(String id) async {
-    if (_uid.isEmpty) return;
-    await _db.collection('users').doc(_uid).collection('inventory').doc(id).delete();
-  }
-
-  static Future<void> completeItem(GroceryItem item) async {
-    if (_uid.isEmpty) return;
-    await _db.collection('users').doc(_uid).collection('stats').add({
-      'itemName': item.name,
-      'date': DateTime.now().toIso8601String(),
-      'status': 'used',
-    });
-    await deleteItem(item.id);
-  }
-
-  static Stream<QuerySnapshot> getStats() {
-    if (_uid.isEmpty) return const Stream.empty();
-    return _db.collection('users').doc(_uid).collection('stats').snapshots();
-  }
+  static Stream<QuerySnapshot> getStats() => _db.collection('users').doc(_uid).collection('stats').snapshots();
 }
 
-// --- HOME PAGE ---
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
-  final ImagePicker _picker = ImagePicker();
   final labeler = ImageLabelerService();
-  String _selectedCategory = 'Total Items';
+  String _cat = 'Total Items';
 
-  @override void initState() { super.initState(); labeler.initialize(); }
-
-  Future<void> _scanItem() async {
-    try {
-      final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
-      if (photo == null || !mounted) return;
-      _showLoading('Analyzing Label with AI...');
-      final mlOcr = MlOcr();
-      final labelData = await mlOcr.analyzeLabel(File(photo.path));
-      final analysis = await labeler.analyzeImage(File(photo.path), labelData.itemName ?? "");
-      mlOcr.dispose();
-      
-      if (!mounted) return;
-      Navigator.pop(context);
-
-      final newItemData = await Navigator.push<Map<String, dynamic>>(context, MaterialPageRoute(builder: (context) => AddItemPage(
-        initialName: labelData.itemName ?? analysis.name,
-        initialCategory: analysis.category,
-        suggestions: analysis.suggestions,
-        imageFile: File(photo.path),
-        initialExpiry: labelData.expiryDate ?? DateTime.now().add(const Duration(days: 7)),
-        isDateDetected: labelData.dateDetected,
-      )));
-
-      if (newItemData != null && mounted) {
-        final item = GroceryItem(
-          id: '', name: newItemData['name'], category: newItemData['category'], quantity: newItemData['quantity'],
-          expiryDate: newItemData['expiryDate'], addedDate: DateTime.now()
-        );
-        await FirebaseService.addItem(item);
-      }
-    } catch (e) { if (mounted) Navigator.pop(context); }
+  @override void initState() {
+    super.initState();
+    labeler.initialize();
   }
 
-  void _showLoading(String msg) {
-    showDialog(context: context, barrierDismissible: false, builder: (context) => AlertDialog(content: Row(children: [const CircularProgressIndicator(), const SizedBox(width: 20), Text(msg)])));
-  }
+  void _showLoading(String msg) => showDialog(context: context, barrierDismissible: false, builder: (c) => AlertDialog(content: Row(children: [const CircularProgressIndicator(), const SizedBox(width: 20), Text(msg)])));
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Smart Inventory', style: TextStyle(fontWeight: FontWeight.bold)),
-        actions: [
-          IconButton(icon: const Icon(Icons.bar_chart), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => const StatsPage()))),
-          IconButton(icon: const Icon(Icons.logout), onPressed: () async {
-            await GoogleSignIn().signOut(); // Ensure Google sign out
-            await FirebaseAuth.instance.signOut();
-          }),
-        ],
         centerTitle: true,
         backgroundColor: Colors.green.shade50,
+        actions: [
+          IconButton(icon: const Icon(Icons.bar_chart), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => const StatsPage()))),
+          IconButton(icon: const Icon(Icons.logout), onPressed: () async { await GoogleSignIn().signOut(); await FirebaseAuth.instance.signOut(); }),
+        ],
       ),
       body: Column(children: [
-        _buildTabs(),
-        Expanded(
-          child: StreamBuilder<List<GroceryItem>>(
-            stream: FirebaseService.getItems(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-              final items = snapshot.data ?? [];
-              return _buildList(items);
-            },
-          ),
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          color: Colors.green.shade50,
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: ['Total Items', 'Almost Expired', 'Expired'].map((c) => InkWell(onTap: () => setState(() => _cat = c), child: Text(c, style: TextStyle(color: _cat == c ? Colors.green.shade800 : Colors.black54, fontWeight: _cat == c ? FontWeight.bold : FontWeight.normal)))).toList()),
         ),
+        Expanded(child: StreamBuilder<List<GroceryItem>>(
+          stream: FirebaseService.getItems(),
+          builder: (context, snap) {
+            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+            final items = _cat == 'Almost Expired' ? snap.data!.where((i) => i.isAlmostExpired).toList() : _cat == 'Expired' ? snap.data!.where((i) => i.isExpired).toList() : snap.data!;
+            if (items.isEmpty) return const Center(child: Text('Inventory is empty.'));
+            return ListView.builder(
+              itemCount: items.length,
+              itemBuilder: (c, i) => Dismissible(
+                key: Key(items[i].id),
+                background: Container(color: Colors.red, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
+                onDismissed: (d) => FirebaseService.markAsWasted(items[i]),
+                child: Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: ListTile(
+                    leading: items[i].imageUrl != null && File(items[i].imageUrl!).existsSync()
+                        ? ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(File(items[i].imageUrl!), width: 50, height: 50, fit: BoxFit.cover))
+                        : const Icon(Icons.inventory_2, color: Colors.green, size: 40),
+                    title: Text(items[i].name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Qty: ${items[i].quantity} | ${items[i].category}'),
+                        Text(items[i].isExpired ? 'Expired!' : 'Expires in ${items[i].expiryDate.difference(DateTime.now()).inDays} days', style: TextStyle(color: items[i].isExpired ? Colors.red : Colors.orange)),
+                      ],
+                    ),
+                    trailing: IconButton(icon: const Icon(Icons.check_circle_outline, color: Colors.green), onPressed: () => FirebaseService.completeItem(items[i])),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (c) => ItemDetailPage(item: items[i]))),
+                  ),
+                ),
+              ),
+            );
+          },
+        )),
       ]),
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          FloatingActionButton.small(heroTag: 'add', backgroundColor: Colors.white, onPressed: () async {
-            final data = await Navigator.push<Map<String, dynamic>>(context, MaterialPageRoute(builder: (context) => AddItemPage(initialName: '', initialCategory: '', suggestions: [], initialExpiry: DateTime.now().add(const Duration(days: 7)), isDateDetected: true)));
-            if (data != null) {
-              await FirebaseService.addItem(GroceryItem(id: '', name: data['name'], category: data['category'], quantity: data['quantity'], expiryDate: data['expiryDate'], addedDate: DateTime.now()));
-            }
-          }, child: const Icon(Icons.add, color: Colors.green)),
+          FloatingActionButton.small(
+            heroTag: 'manual',
+            child: const Icon(Icons.edit, color: Colors.green),
+            backgroundColor: Colors.white,
+            onPressed: () async {
+              final data = await Navigator.push<Map<String, dynamic>>(context, MaterialPageRoute(builder: (c) => const AddItemPage(initialName: '', initialCategory: '', suggestions: [], initialExpiry: null, isDateDetected: true)));
+              if (data != null) {
+                await FirebaseService.addItem(GroceryItem(id: '', name: data['name'], category: data['category'], quantity: data['quantity'], expiryDate: data['expiryDate'], addedDate: DateTime.now(), imageUrl: data['imageUrl']));
+              }
+            },
+          ),
           const SizedBox(height: 12),
-          FloatingActionButton(heroTag: 'scan', onPressed: _scanItem, child: const Icon(Icons.qr_code_scanner)),
+          FloatingActionButton(
+            heroTag: 'scan',
+            child: const Icon(Icons.qr_code_scanner),
+            onPressed: () async {
+              final photo = await ImagePicker().pickImage(source: ImageSource.camera, maxWidth: 1200, maxHeight: 1200, imageQuality: 85);
+              if (photo == null) return;
+              _showLoading('Analyzing...');
+              final ocr = MlOcr();
+              final labelData = await ocr.analyzeLabel(File(photo.path));
+              final analysis = await labeler.analyzeImage(File(photo.path), labelData.itemName ?? "");
+              ocr.dispose();
+              Navigator.pop(context);
+              final data = await Navigator.push<Map<String, dynamic>>(context, MaterialPageRoute(builder: (c) => AddItemPage(initialName: labelData.itemName ?? analysis.name, initialCategory: analysis.category, suggestions: analysis.suggestions, initialExpiry: labelData.expiryDate, isDateDetected: labelData.dateDetected, imageFile: File(photo.path))));
+              if (data != null) {
+                await FirebaseService.addItem(GroceryItem(id: '', name: data['name'], category: data['category'], quantity: data['quantity'], expiryDate: data['expiryDate'], addedDate: DateTime.now(), imageUrl: data['imageUrl']));
+              }
+            },
+          ),
         ],
       ),
     );
   }
-
-  Widget _buildTabs() {
-    const cats = ['Total Items', 'Almost Expired', 'Expired'];
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      color: Colors.green.shade50,
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: cats.map((c) {
-        bool selected = _selectedCategory == c;
-        return InkWell(
-          onTap: () => setState(() => _selectedCategory = c),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(c, style: TextStyle(color: selected ? Colors.green.shade800 : Colors.black54, fontWeight: selected ? FontWeight.bold : FontWeight.normal)),
-              if (selected) Container(margin: const EdgeInsets.only(top: 4), height: 2, width: 40, color: Colors.green.shade800)
-            ],
-          ),
-        );
-      }).toList()),
-    );
-  }
-
-  Widget _buildList(List<GroceryItem> allItems) {
-    final filtered = _selectedCategory == 'Almost Expired' ? allItems.where((i) => i.isAlmostExpired).toList() : _selectedCategory == 'Expired' ? allItems.where((i) => i.isExpired).toList() : allItems;
-    if (filtered.isEmpty) return const Center(child: Text('Inventory is empty.'));
-    
-    return ListView.builder(
-      padding: const EdgeInsets.only(top: 8, bottom: 80),
-      itemCount: filtered.length, 
-      itemBuilder: (context, i) {
-        final item = filtered[i];
-        final days = item.expiryDate.difference(DateTime.now()).inDays;
-        return Dismissible(
-          key: Key(item.id),
-          direction: DismissDirection.endToStart,
-          background: Container(alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20.0), color: Colors.red, child: const Icon(Icons.delete, color: Colors.white)),
-          onDismissed: (direction) {
-            NotificationService.cancelNotifications(item.id);
-            FirebaseService.deleteItem(item.id);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} removed')));
-          },
-          child: Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6), 
-            child: ListTile(
-              contentPadding: const EdgeInsets.all(12),
-              leading: Container(width: 50, height: 50, color: Colors.green.shade100, child: const Icon(Icons.inventory_2, color: Colors.green)),
-              title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              subtitle: Text(item.isExpired ? 'Expired!' : 'Expires in $days days', style: TextStyle(color: item.isExpired ? Colors.red : item.isAlmostExpired ? Colors.orange : Colors.green.shade700, fontWeight: FontWeight.w600)),
-              trailing: IconButton(icon: const Icon(Icons.check_circle_outline, color: Colors.green), onPressed: () => FirebaseService.completeItem(item)),
-              onTap: () async {
-                final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => ItemDetailPage(item: item)));
-                if (result == 'delete' && mounted) FirebaseService.deleteItem(item.id);
-              },
-            )
-          ),
-        );
-      }
-    );
-  }
 }
 
-// --- STATS PAGE ---
 class StatsPage extends StatelessWidget {
   const StatsPage({super.key});
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Waste Reduction Stats')),
+      appBar: AppBar(title: const Text('Sustainability Analyst')),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseService.getStats(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          final docs = snapshot.data!.docs;
-          // Group by date for the graph
-          Map<String, int> dailyCount = {};
-          for (var doc in docs) {
-            String date = (doc.data() as Map)['date'].toString().split('T')[0];
-            dailyCount[date] = (dailyCount[date] ?? 0) + 1;
-          }
-          
-          List<BarChartGroupData> barGroups = [];
-          int i = 0;
-          dailyCount.forEach((date, count) {
-            barGroups.add(BarChartGroupData(x: i++, barRods: [BarChartRodData(toY: count.toDouble(), color: Colors.green)]));
-          });
+        builder: (context, statsSnap) {
+          return StreamBuilder<List<GroceryItem>>(
+            stream: FirebaseService.getItems(),
+            builder: (context, invSnap) {
+              if (!statsSnap.hasData || !invSnap.hasData) return const Center(child: CircularProgressIndicator());
+              final stats = statsSnap.data!.docs, inventory = invSnap.data!;
+              final wasted = stats.where((d) => (d.data() as Map)['status'] == 'wasted').toList();
+              final saved = stats.where((d) => (d.data() as Map)['status'] == 'used').toList();
 
-          return Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              children: [
-                const Text('Food Items Saved from Waste', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 30),
-                if (barGroups.isEmpty) 
-                  const Expanded(child: Center(child: Text("No data yet. Use items to see your impact!")))
-                else
-                  SizedBox(height: 300, child: BarChart(BarChartData(barGroups: barGroups))),
-                const SizedBox(height: 20),
-                Text('Total Items Saved: ${docs.length}', style: const TextStyle(fontSize: 20)),
-              ],
-            ),
+              double totalSavedQty = 0;
+              for (var d in saved) { totalSavedQty += (d.data() as Map)['quantity'] ?? 1; }
+              double totalWastedQty = 0;
+              for (var d in wasted) { totalWastedQty += (d.data() as Map)['quantity'] ?? 1; }
+
+              int score = (totalSavedQty + totalWastedQty == 0) ? 100 : ((totalSavedQty / (totalSavedQty + totalWastedQty)) * 100).round();
+              String risk = inventory.any((i) => i.isExpired) ? "High" : (inventory.any((i) => i.isAlmostExpired) ? "Medium" : "Low");
+
+              Map<String, double> catWaste = {};
+              for (var d in wasted) {
+                String c = (d.data() as Map)['category'] ?? 'Others';
+                double qty = ((d.data() as Map)['quantity'] ?? 1).toDouble();
+                catWaste[c] = (catWaste[c] ?? 0) + qty;
+              }
+              if (catWaste.isEmpty) catWaste['No Waste'] = 1;
+
+              // MONDAY START CALCULATION
+              DateTime now = DateTime.now();
+              DateTime lastMonday = now.subtract(Duration(days: now.weekday - 1));
+              List<BarChartGroupData> barGroups = [];
+              for (int i = 0; i < 7; i++) {
+                DateTime dt = lastMonday.add(Duration(days: i));
+                String dateStr = dt.toIso8601String().split('T')[0];
+                double dayWasteQty = 0;
+                for (var d in wasted) {
+                  if ((d.data() as Map)['date'].toString().startsWith(dateStr)) {
+                    dayWasteQty += (d.data() as Map)['quantity'] ?? 1;
+                  }
+                }
+                barGroups.add(BarChartGroupData(x: i, barRods: [BarChartRodData(toY: dayWasteQty, color: Colors.redAccent, width: 15)]));
+              }
+
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _buildReportCard(score, risk, totalWastedQty),
+                  const SizedBox(height: 30),
+                  const Text('Waste Distribution by Category (Qty)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  SizedBox(height: 200, child: PieChart(PieChartData(sections: catWaste.entries.map((e) => PieChartSectionData(value: e.value, title: '${e.key}\n(${e.value.toInt()})', radius: 50, color: Colors.primaries[catWaste.keys.toList().indexOf(e.key) % Colors.primaries.length], titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))).toList()))),
+                  const SizedBox(height: 30),
+                  const Text('Weekly Food Waste Trend (Qty)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  SizedBox(height: 250, child: BarChart(BarChartData(
+                    barGroups: barGroups,
+                    gridData: const FlGridData(show: false),
+                    titlesData: FlTitlesData(
+                      leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 40)),
+                      bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, m) => Padding(padding: const EdgeInsets.only(top: 8.0), child: Text(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][v.toInt() % 7], style: const TextStyle(fontSize: 10))))),
+                    ),
+                  ))),
+                ]),
+              );
+            },
           );
         },
       ),
     );
   }
+
+  Widget _buildReportCard(int score, String risk, double wastedQty) {
+    return Card(color: Colors.green.shade50, child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Waste Risk Level:', style: TextStyle(fontWeight: FontWeight.bold)), Text(risk, style: TextStyle(color: risk == "High" ? Colors.red : (risk == "Medium" ? Colors.orange : Colors.green), fontWeight: FontWeight.bold))]),
+      const Divider(),
+      Text('Sustainability Score: $score/100', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green)),
+      Text('Total Items Wasted: ${wastedQty.toInt()}', style: const TextStyle(fontSize: 16)),
+      const SizedBox(height: 10), const Text('Practical Suggestions:', style: TextStyle(fontWeight: FontWeight.bold)),
+      const Text('• Use near-expiry vegetables in soups.\n• Freeze dairy products before expiry.\n• Plan meals weekly to reduce overbuying.'),
+      const SizedBox(height: 15), Text(score > 70 ? "“Great job! You're making progress in saving the planet.”" : "“Focus on reducing waste to improve your score!”", style: const TextStyle(fontStyle: FontStyle.italic)),
+    ])));
+  }
 }
 
-// --- ITEM DETAIL PAGE ---
+class AddItemPage extends StatefulWidget {
+  final String initialName, initialCategory;
+  final List<String> suggestions;
+  final DateTime? initialExpiry;
+  final bool isDateDetected;
+  final String? editId;
+  final File? imageFile;
+
+  const AddItemPage({super.key, required this.initialName, required this.initialCategory, required this.suggestions, this.initialExpiry, required this.isDateDetected, this.editId, this.imageFile});
+  @override State<AddItemPage> createState() => _AddItemPageState();
+}
+
+class _AddItemPageState extends State<AddItemPage> {
+  late TextEditingController _name, _cat, _qty;
+  late DateTime _expiry;
+  String? _localPath;
+
+  @override void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.initialName);
+    _cat = TextEditingController(text: widget.initialCategory);
+    _qty = TextEditingController(text: '1');
+    _expiry = widget.initialExpiry ?? DateTime.now().add(const Duration(days: 7));
+    _localPath = widget.imageFile?.path;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.editId != null ? 'Edit Item' : 'Add Item')),
+      body: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_localPath != null) Center(child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(_localPath!), height: 150, fit: BoxFit.cover))),
+        const SizedBox(height: 15),
+        if (!widget.isDateDetected) Container(margin: const EdgeInsets.only(bottom: 15), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(8)), child: const Row(children: [Icon(Icons.warning, color: Colors.orange), SizedBox(width: 10), Expanded(child: Text('Expiry date not detected. Set manually.', style: TextStyle(color: Colors.orange)))])) ,
+        TextField(controller: _name, onChanged: (v) => setState(() {}), decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder())), const SizedBox(height: 12),
+        TextField(controller: _cat, decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder())), const SizedBox(height: 12),
+        TextField(controller: _qty, decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()), keyboardType: TextInputType.number), const SizedBox(height: 12),
+        ListTile(title: const Text('Expiry Date'), subtitle: Text(_expiry.toString().split(' ')[0]), trailing: const Icon(Icons.calendar_today), onTap: () async { final d = await showDatePicker(context: context, initialDate: _expiry, firstDate: DateTime.now().subtract(const Duration(days: 30)), lastDate: DateTime.now().add(const Duration(days: 3650))); if (d != null) setState(() => _expiry = d); }),
+        const Divider(height: 40),
+        const Text('Details & Suggestions (Preview):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const SizedBox(height: 8),
+        Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)), child: Text(LocalRecipeService.getRecipeSuggestions(_name.text), style: const TextStyle(fontSize: 14))),
+        const SizedBox(height: 30),
+        SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(context, {'name': _name.text, 'category': _cat.text, 'quantity': int.tryParse(_qty.text) ?? 1, 'expiryDate': _expiry, 'imageUrl': _localPath}), child: Text(widget.editId != null ? 'Save Changes' : 'Add to Inventory')))
+      ])),
+    );
+  }
+}
+
 class ItemDetailPage extends StatelessWidget {
   final GroceryItem item;
   const ItemDetailPage({super.key, required this.item});
@@ -392,68 +422,53 @@ class ItemDetailPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-        actions: [IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => Navigator.pop(context, 'delete'))],
-      ),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [_infoChip(Icons.category, item.category), const SizedBox(width: 8), _infoChip(Icons.numbers, 'Qty: ${item.quantity}')]),
+      appBar: AppBar(title: Text(item.name), actions: [
+        IconButton(icon: const Icon(Icons.edit), onPressed: () async {
+          final data = await Navigator.push<Map<String, dynamic>>(context, MaterialPageRoute(builder: (c) => AddItemPage(initialName: item.name, initialCategory: item.category, suggestions: [], initialExpiry: item.expiryDate, isDateDetected: true, editId: item.id, imageFile: item.imageUrl != null ? File(item.imageUrl!) : null)));
+          if (data != null) { await FirebaseService.updateItem(item.id, data); Navigator.pop(context); }
+        }),
+        IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () { FirebaseService.deleteItem(item.id); Navigator.pop(context); })
+      ]),
+      body: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (item.imageUrl != null && File(item.imageUrl!).existsSync()) Center(child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(File(item.imageUrl!), height: 200, fit: BoxFit.cover))),
+        const SizedBox(height: 20),
+        Row(children: [
+          _infoChip(Icons.category, item.category),
+          const SizedBox(width: 8),
+          _infoChip(Icons.numbers, 'Qty: ${item.quantity}'),
+        ]),
         const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(color: item.isExpired ? Colors.red.shade50 : Colors.green.shade50, borderRadius: BorderRadius.circular(12)),
-          child: Row(children: [Icon(Icons.event, color: item.isExpired ? Colors.red : Colors.green), const SizedBox(width: 12), Text('Expiry Date: ${item.expiryDate.toString().split(' ')[0]}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: item.isExpired ? Colors.red : Colors.green.shade900))]),
+          child: Row(children: [
+            Icon(Icons.event, color: item.isExpired ? Colors.red : Colors.green),
+            const SizedBox(width: 12),
+            Text('Expiry Date: ${item.expiryDate.toString().split(' ')[0]}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: item.isExpired ? Colors.red : Colors.green.shade900)),
+          ]),
         ),
         const Divider(height: 48),
-        const Text('Suggested Local Recipes:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(12)), child: Text(LocalRecipeService.getRecipeSuggestions(item.name), style: const TextStyle(fontSize: 15, height: 1.5))),
+        const Text('Suggested Recipes:', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        Text(LocalRecipeService.getRecipeSuggestions(item.name), style: const TextStyle(fontSize: 16)),
       ])),
     );
   }
   Widget _infoChip(IconData icon, String text) => Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(20)), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 16), const SizedBox(width: 4), Text(text)]));
 }
 
-// --- ADD ITEM PAGE ---
-class AddItemPage extends StatefulWidget {
-  final String initialName; final String initialCategory; final List<String> suggestions; final File? imageFile; final DateTime initialExpiry; final bool isDateDetected;
-  const AddItemPage({super.key, required this.initialName, required this.initialCategory, required this.suggestions, this.imageFile, required this.initialExpiry, required this.isDateDetected});
-  @override State<AddItemPage> createState() => _AddItemPageState();
-}
-class _AddItemPageState extends State<AddItemPage> {
-  late TextEditingController _name, _cat, _qty; late DateTime _expiry;
-  @override void initState() { super.initState(); _name = TextEditingController(text: widget.initialName); _cat = TextEditingController(text: widget.initialCategory); _qty = TextEditingController(text: '1'); _expiry = widget.initialExpiry; }
-  @override Widget build(BuildContext context) {
-    return Scaffold(appBar: AppBar(title: const Text('Add Item')), body: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      TextField(controller: _name, decoration: const InputDecoration(labelText: 'Item Name', border: OutlineInputBorder(), prefixIcon: Icon(Icons.shopping_basket))),
-      const SizedBox(height: 16),
-      TextField(controller: _cat, decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder(), prefixIcon: Icon(Icons.category))),
-      const SizedBox(height: 16),
-      TextField(controller: _qty, decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder(), prefixIcon: Icon(Icons.numbers)), keyboardType: TextInputType.number),
-      const SizedBox(height: 16),
-      ListTile(title: const Text('Expiry Date'), subtitle: Text('${_expiry.toLocal()}'.split(' ')[0]), trailing: const Icon(Icons.calendar_today), onTap: () async {
-        final d = await showDatePicker(context: context, initialDate: _expiry, firstDate: DateTime.now().subtract(const Duration(days: 30)), lastDate: DateTime.now().add(const Duration(days: 3650)));
-        if (d != null) setState(() => _expiry = d);
-      }, tileColor: Colors.grey[100], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-      const SizedBox(height: 32),
-      SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(context, {'name': _name.text, 'category': _cat.text, 'quantity': int.tryParse(_qty.text) ?? 1, 'expiryDate': _expiry}), child: const Text('Add to Inventory', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))))
-    ])));
-  }
-}
-
-// --- NOTIFICATION SERVICE ---
 class NotificationService {
-  static final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  static final _n = FlutterLocalNotificationsPlugin();
   static Future<void> init() async {
     tz.initializeTimeZones();
     const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-    await _notifications.initialize(const InitializationSettings(android: initializationSettingsAndroid));
+    await _n.initialize(const InitializationSettings(android: initializationSettingsAndroid));
   }
-  static Future<void> scheduleExpiryNotification(GroceryItem item) async {
-    final alertDate = item.expiryDate.subtract(const Duration(days: 2));
-    if (alertDate.isAfter(DateTime.now())) {
-      await _notifications.zonedSchedule(item.id.hashCode, 'Almost Expired: ${item.name}', 'Use it soon!', tz.TZDateTime.from(alertDate, tz.local).add(const Duration(hours: 9)), const NotificationDetails(android: AndroidNotificationDetails('expiry_channel', 'Expiry Alerts', importance: Importance.max, priority: Priority.high)), androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle, uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime);
+  static Future<void> scheduleExpiryNotification(GroceryItem i) async {
+    final alert = i.expiryDate.subtract(const Duration(days: 2));
+    if (alert.isAfter(DateTime.now())) {
+      await _n.zonedSchedule(i.id.hashCode, 'Expiring Soon', '${i.name} in 2 days', tz.TZDateTime.from(alert, tz.local).add(const Duration(hours: 9)), const NotificationDetails(android: AndroidNotificationDetails('exp', 'Exp')), androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle, uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime);
     }
   }
-  static Future<void> cancelNotifications(String id) async => await _notifications.cancel(id.hashCode);
+  static Future<void> cancelNotifications(String id) async => await _n.cancel(id.hashCode);
 }
