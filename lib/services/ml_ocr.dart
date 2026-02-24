@@ -5,7 +5,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 class LabelData {
   final String? itemName;
   final DateTime? expiryDate;
-  final bool dateDetected; // New field to track if date was actually found
+  final bool dateDetected;
 
   LabelData({this.itemName, this.expiryDate, this.dateDetected = false});
 }
@@ -13,7 +13,6 @@ class LabelData {
 class MlOcr {
   final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-  /// Extracts structured data from a grocery price label
   Future<LabelData> analyzeLabel(File imageFile) async {
     final inputImage = InputImage.fromFile(imageFile);
     final recognizedText = await _textRecognizer.processImage(inputImage);
@@ -28,21 +27,19 @@ class MlOcr {
     );
   }
 
-  /// Finds the item name by capturing the whole line where a keyword exists
-  /// This helps capture short-forms like "I/BILIS" or "AYAM PANGGANG"
   String? _extractItemName(String text) {
     const keywords = [
       'apple', 'banana', 'orange', 'onion', 'garlic', 'cabbage', 'broccoli',
       'milk', 'bread', 'egg', 'tomato', 'potato', 'chicken', 'fish', 'meat',
       'beef', 'mutton', 'lamb', 'pork', 'shrimp', 'prawn', 'crab', 'squid',
-      'duck', 'anchovies', 'salmon', 'tuna', 'epal', 'pisang', 'oren',
-      'bawang', 'kubis', 'susu', 'roti', 'telur', 'tomat', 'kentang',
+      'duck', 'anchovies', 'salmon', 'tuna', 'papaya', 'epal', 'pisang', 'oren',
+      'bawang', 'kubis', 'kobis', 'susu', 'roti', 'telur', 'tomat', 'kentang',
       'timun', 'halia', 'lobak', 'sawi', 'kangkung', 'bayam', 'terung',
       'cili', 'serai', 'lengkuas', 'kunyit', 'petai', 'kacang', 'bendi',
       'peria', 'labu', 'jagung', 'limau', 'tembikai', 'nanas', 'betik',
       'mangga', 'durian', 'rambutan', 'nangka', 'ayam', 'ikan', 'daging',
       'lembu', 'kambing', 'udang', 'ketam', 'sotong', 'puyuh', 'itik',
-      'bilis', 'kerang', 'siput' // 'bilis' instead of 'ikan bilis' to catch 'i/bilis'
+      'bilis', 'kerang', 'siput'
     ];
 
     final lines = text.split('\n');
@@ -50,8 +47,6 @@ class MlOcr {
       final cleanLine = line.trim().toLowerCase();
       for (var k in keywords) {
         if (cleanLine.contains(k)) {
-          // Instead of just the keyword, we return the whole line context
-          // as printed on the label (e.g., "I/BILIS L")
           return line.trim().toUpperCase();
         }
       }
@@ -59,7 +54,6 @@ class MlOcr {
     return null;
   }
 
-  /// Malaysia-specific date parser
   DateTime? _extractExpiryDate(String text) {
     final dateRegex = RegExp(r'(\d{2,4}|\d{1,2})[\/\-\.\s](\d{1,2}|[a-zA-Z]{3,10})[\/\-\.\s](\d{2,4}|\d{1,2})');
     final expiryKeywords = ['bb', 'exp', 'best before', 'use by', 'guna sebelum', 'tarikh luput', 'baik sebelum'];
