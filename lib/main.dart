@@ -27,23 +27,20 @@ class NotificationService {
 
   static Future<void> scheduleExpiryNotification(GroceryItem item) async {
     final now = DateTime.now();
-
-    // FOR TESTING: Set alert to exactly 1 minute from this second
-    final alertDate = now.add(const Duration(minutes: 1));
-
+    final alertDate = item.expiryDate.subtract(const Duration(days: 2));
+    
     if (alertDate.isAfter(now)) {
       await _notifications.zonedSchedule(
         item.id.hashCode,
         'GrocerKu: Waste Alert! 🥗',
-        'Testing: This is your 1-minute alert for ${item.name}!',
-        tz.TZDateTime.from(alertDate, tz.local), // Use alertDate directly
+        'Your ${item.name} is expiring in 2 days. Use it now to save food!',
+        tz.TZDateTime.from(alertDate, tz.local).add(const Duration(hours: 9)),
         const NotificationDetails(
           android: AndroidNotificationDetails(
-            'expiry_channel',
-            'Expiry Alerts',
+            'expiry_channel', 'Expiry Alerts',
             importance: Importance.max,
             priority: Priority.high,
-            showWhen: true,
+            ticker: 'ticker',
           ),
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -51,23 +48,10 @@ class NotificationService {
       );
     }
   }
-  // static Future<void> scheduleExpiryNotification(GroceryItem item) async {
-  //   final now = DateTime.now();
-  //   final alertDate = item.expiryDate.subtract(const Duration(minutes: 1));
-  //   if (alertDate.isAfter(now)) {
-  //     await _notifications.zonedSchedule(
-  //       item.id.hashCode,
-  //       'GrocerKu: Waste Alert! 🥗',
-  //       'Your ${item.name} is expiring in 2 days. Use it now to save food!',
-  //       tz.TZDateTime.from(alertDate, tz.local).add(const Duration(hours: 9)),
-  //       const NotificationDetails(android: AndroidNotificationDetails('expiry_channel', 'Expiry Alerts', importance: Importance.max, priority: Priority.high)),
-  //       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-  //       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-  //     );
-  //   }
-  // }
 
-  static Future<void> cancelNotifications(String id) async => await _notifications.cancel(id.hashCode);
+  static Future<void> cancelNotifications(String id) async {
+    await _notifications.cancel(id.hashCode);
+  }
 }
 
 void main() async {
@@ -167,21 +151,41 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
+// --- DATA MODELS ---
 class GroceryItem {
   String name, category, id; int quantity; DateTime expiryDate, addedDate; String? imageUrl;
   GroceryItem({required this.name, required this.category, required this.quantity, required this.expiryDate, required this.addedDate, this.imageUrl, required this.id});
   Map<String, dynamic> toMap() => {'name': name, 'category': category, 'quantity': quantity, 'expiryDate': expiryDate.toIso8601String(), 'addedDate': addedDate.toIso8601String(), 'imageUrl': imageUrl};
   factory GroceryItem.fromDoc(DocumentSnapshot doc) {
-    final d = doc.data() as Map<String, dynamic>;
-    return GroceryItem(id: doc.id, name: d['name'], category: d['category'], quantity: d['quantity'] ?? 1, expiryDate: DateTime.parse(d['expiryDate']), addedDate: DateTime.parse(d['addedDate']), imageUrl: d['imageUrl']);
+    final d = doc.data() as Map<String, dynamic>? ?? {};
+    return GroceryItem(id: doc.id, name: d['name'] ?? '', category: d['category'] ?? '', quantity: d['quantity'] ?? 1, expiryDate: DateTime.parse(d['expiryDate'] ?? DateTime.now().toIso8601String()), addedDate: DateTime.parse(d['addedDate'] ?? DateTime.now().toIso8601String()), imageUrl: d['imageUrl']);
   }
   bool get isAlmostExpired => expiryDate.difference(DateTime.now()).inDays <= 3 && !isExpired;
   bool get isExpired => expiryDate.isBefore(DateTime.now());
 }
 
+class Post {
+  final String id, authorEmail, text; final DateTime timestamp; final List<String> likes, savedBy, hiddenBy;
+  Post({required this.id, required this.authorEmail, required this.text, required this.timestamp, required this.likes, required this.savedBy, required this.hiddenBy});
+  factory Post.fromDoc(DocumentSnapshot doc) {
+    final d = doc.data() as Map<String, dynamic>? ?? {};
+    return Post(id: doc.id, authorEmail: d['authorEmail'] ?? '', text: d['text'] ?? '', timestamp: (d['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(), likes: List<String>.from(d['likes'] ?? []), savedBy: List<String>.from(d['savedBy'] ?? []), hiddenBy: List<String>.from(d['hiddenBy'] ?? []));
+  }
+}
+
+class Comment {
+  final String authorEmail, text; final DateTime timestamp;
+  Comment({required this.authorEmail, required this.text, required this.timestamp});
+  factory Comment.fromDoc(DocumentSnapshot doc) {
+    final d = doc.data() as Map<String, dynamic>? ?? {};
+    return Comment(authorEmail: d['authorEmail'] ?? '', text: d['text'] ?? '', timestamp: (d['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now());
+  }
+}
+
 class FirebaseService {
   static final _db = FirebaseFirestore.instance;
   static String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
+
   static Stream<List<GroceryItem>> getItems() => _db.collection('users').doc(_uid).collection('inventory').snapshots().map((s) => s.docs.map((d) => GroceryItem.fromDoc(d)).toList());
   static Future<void> addItem(GroceryItem i) async {
     final doc = await _db.collection('users').doc(_uid).collection('inventory').add(i.toMap());
@@ -201,6 +205,15 @@ class FirebaseService {
     await deleteItem(i.id);
   }
   static Stream<QuerySnapshot> getStats() => _db.collection('users').doc(_uid).collection('stats').snapshots();
+
+  // Community logic
+  static Stream<List<Post>> getPosts() => _db.collection('community').orderBy('timestamp', descending: true).snapshots().map((s) => s.docs.map((d) => Post.fromDoc(d)).toList());
+  static Future<void> addPost(String text) async => await _db.collection('community').add({'authorEmail': FirebaseAuth.instance.currentUser?.email ?? 'User', 'text': text, 'timestamp': FieldValue.serverTimestamp(), 'likes': [], 'savedBy': [], 'hiddenBy': []});
+  static Future<void> toggleLike(String pid, List<String> l) async => await _db.collection('community').doc(pid).update({'likes': l.contains(_uid) ? FieldValue.arrayRemove([_uid]) : FieldValue.arrayUnion([_uid])});
+  static Future<void> toggleSave(String pid, List<String> s) async => await _db.collection('community').doc(pid).update({'savedBy': s.contains(_uid) ? FieldValue.arrayRemove([_uid]) : FieldValue.arrayUnion([_uid])});
+  static Future<void> hidePost(String pid) async => await _db.collection('community').doc(pid).update({'hiddenBy': FieldValue.arrayUnion([_uid])});
+  static Stream<List<Comment>> getComments(String pid) => _db.collection('community').doc(pid).collection('comments').orderBy('timestamp', descending: true).snapshots().map((s) => s.docs.map((d) => Comment.fromDoc(d)).toList());
+  static Future<void> addComment(String pid, String text) async => await _db.collection('community').doc(pid).collection('comments').add({'authorEmail': FirebaseAuth.instance.currentUser?.email ?? 'User', 'text': text, 'timestamp': FieldValue.serverTimestamp()});
 }
 
 class HomePage extends StatefulWidget {
@@ -233,22 +246,23 @@ class _HomePageState extends State<HomePage> {
       body: Stack(children: [
         Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.white, Colors.green.shade50.withOpacity(0.3)]))),
         Positioned(bottom: 50, right: -30, child: Opacity(opacity: 0.03, child: Icon(Icons.shopping_basket, size: 250, color: Colors.green))),
-        StreamBuilder<List<GroceryItem>>(stream: FirebaseService.getItems(), builder: (context, snap) {
+        _currentIndex == 3 ? const CommunityPage() : StreamBuilder<List<GroceryItem>>(stream: FirebaseService.getItems(), builder: (context, snap) {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final items = _currentIndex == 1 ? snap.data!.where((i) => i.isAlmostExpired).toList() : _currentIndex == 2 ? snap.data!.where((i) => i.isExpired).toList() : snap.data!;
           if (items.isEmpty) return const Center(child: Text('Inventory is clear!'));
           return ListView.builder(padding: const EdgeInsets.fromLTRB(16, 16, 16, 100), itemCount: items.length, itemBuilder: (c, i) => _buildCard(items[i]));
         }),
       ]),
-      floatingActionButton: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+      floatingActionButton: _currentIndex == 3 ? null : Column(mainAxisAlignment: MainAxisAlignment.end, children: [
         FloatingActionButton.small(heroTag: 'man', child: const Icon(Icons.edit), backgroundColor: Colors.orange, onPressed: () => _openAdd(null)),
         const SizedBox(height: 12),
         FloatingActionButton(heroTag: 'scn', child: const Icon(Icons.qr_code_scanner), backgroundColor: Colors.green, onPressed: _scanItem),
       ]),
-      bottomNavigationBar: BottomNavigationBar(currentIndex: _currentIndex, selectedItemColor: Colors.green.shade800, onTap: (idx) => setState(() => _currentIndex = idx), items: const [
+      bottomNavigationBar: BottomNavigationBar(currentIndex: _currentIndex, selectedItemColor: Colors.green.shade800, unselectedItemColor: Colors.grey, type: BottomNavigationBarType.fixed, onTap: (idx) => setState(() => _currentIndex = idx), items: const [
         BottomNavigationBarItem(icon: Icon(Icons.inventory_2_outlined), activeIcon: Icon(Icons.inventory_2), label: 'Fridge'),
         BottomNavigationBarItem(icon: Icon(Icons.timer_outlined), label: 'Alerts'),
         BottomNavigationBarItem(icon: Icon(Icons.error_outline), label: 'Expired'),
+        BottomNavigationBarItem(icon: Icon(Icons.groups_outlined), activeIcon: Icon(Icons.groups), label: 'Community'),
       ]),
     );
   }
@@ -278,279 +292,132 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+class CommunityPage extends StatefulWidget {
+  const CommunityPage({super.key});
+  @override State<CommunityPage> createState() => _CommunityPageState();
+}
+
+class _CommunityPageState extends State<CommunityPage> {
+  final _postController = TextEditingController();
+  @override Widget build(BuildContext context) {
+    return Column(children: [
+      Padding(padding: const EdgeInsets.all(16), child: Row(children: [
+        Expanded(child: TextField(controller: _postController, decoration: InputDecoration(hintText: "Discuss groceries here...", filled: true, fillColor: Colors.white.withOpacity(0.8), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none)))),
+        const SizedBox(width: 8),
+        IconButton.filled(onPressed: () { if (_postController.text.trim().isEmpty) return; FirebaseService.addPost(_postController.text.trim()); _postController.clear(); FocusScope.of(context).unfocus(); }, icon: const Icon(Icons.send)),
+      ])),
+      Expanded(child: StreamBuilder<List<Post>>(stream: FirebaseService.getPosts(), builder: (context, snap) {
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+        final posts = snap.data!.where((p) => !p.hiddenBy.contains(FirebaseService._uid)).toList();
+        if (posts.isEmpty) return const Center(child: Text("No discussions yet."));
+        return ListView.builder(itemCount: posts.length, itemBuilder: (c, i) => _PostCard(post: posts[i]));
+      }))
+    ]);
+  }
+}
+
+class _PostCard extends StatelessWidget {
+  final Post post; const _PostCard({required this.post});
+  @override Widget build(BuildContext context) {
+    return Card(margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        CircleAvatar(backgroundColor: Colors.green.shade100, child: Text(post.authorEmail[0].toUpperCase())),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(post.authorEmail, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)), Text(post.timestamp.toString().split('.')[0], style: const TextStyle(fontSize: 10, color: Colors.grey))])),
+        IconButton(icon: const Icon(Icons.visibility_off_outlined, size: 18), onPressed: () => FirebaseService.hidePost(post.id)),
+      ]),
+      const SizedBox(height: 12),
+      Text(post.text, style: const TextStyle(fontSize: 16)),
+      const Divider(height: 24),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+        _ActionBtn(icon: post.likes.contains(FirebaseService._uid) ? Icons.favorite : Icons.favorite_border, label: '${post.likes.length}', color: post.likes.contains(FirebaseService._uid) ? Colors.red : null, onTap: () => FirebaseService.toggleLike(post.id, post.likes)),
+        _ActionBtn(icon: Icons.comment_outlined, label: 'Reply', onTap: () => _showComments(context)),
+        _ActionBtn(icon: post.savedBy.contains(FirebaseService._uid) ? Icons.bookmark : Icons.bookmark_border, label: 'Save', color: post.savedBy.contains(FirebaseService._uid) ? Colors.blue : null, onTap: () => FirebaseService.toggleSave(post.id, post.savedBy)),
+      ]),
+    ])));
+  }
+  void _showComments(BuildContext context) {
+    showModalBottomSheet(context: context, isScrollControlled: true, builder: (c) => Padding(padding: EdgeInsets.only(bottom: MediaQuery.of(c).viewInsets.bottom), child: _CommentSheet(post: post)));
+  }
+}
+
+class _CommentSheet extends StatefulWidget {
+  final Post post; const _CommentSheet({required this.post});
+  @override State<_CommentSheet> createState() => _CommentSheetState();
+}
+
+class _CommentSheetState extends State<_CommentSheet> {
+  final _commentController = TextEditingController();
+  @override Widget build(BuildContext context) {
+    return Container(height: 400, padding: const EdgeInsets.all(16), child: Column(children: [
+      const Text("Discussion", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+      const Divider(),
+      Expanded(child: StreamBuilder<List<Comment>>(stream: FirebaseService.getComments(widget.post.id), builder: (c, snap) {
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+        return ListView.builder(itemCount: snap.data!.length, itemBuilder: (c, i) => ListTile(title: Text(snap.data![i].authorEmail, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)), subtitle: Text(snap.data![i].text)));
+      })),
+      Row(children: [
+        Expanded(child: TextField(controller: _commentController, decoration: const InputDecoration(hintText: "Write a reply..."))),
+        IconButton(icon: const Icon(Icons.send), onPressed: () { if (_commentController.text.trim().isEmpty) return; FirebaseService.addComment(widget.post.id, _commentController.text.trim()); _commentController.clear(); }),
+      ]),
+    ]));
+  }
+}
+
+class _ActionBtn extends StatelessWidget {
+  final IconData icon; final String label; final VoidCallback onTap; final Color? color;
+  const _ActionBtn({required this.icon, required this.label, required this.onTap, this.color});
+  @override Widget build(BuildContext context) {
+    return InkWell(onTap: onTap, child: Row(children: [Icon(icon, size: 20, color: color), const SizedBox(width: 4), Text(label, style: const TextStyle(fontSize: 12))]));
+  }
+}
+
 class StatsPage extends StatefulWidget {
   const StatsPage({super.key});
   @override State<StatsPage> createState() => _StatsPageState();
 }
 
 class _StatsPageState extends State<StatsPage> {
-  @override
-  Widget build(BuildContext context) {
+  @override Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Impact Analysis'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => setState(() {}),
-          ),
-        ],
-      ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseService.getStats(),
-        builder: (context, statsSnap) {
-          return StreamBuilder<List<GroceryItem>>(
-            stream: FirebaseService.getItems(),
-            builder: (context, invSnap) {
-              if (!statsSnap.hasData || !invSnap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final stats = statsSnap.data!.docs;
-              final inventory = invSnap.data!;
-
-              final wasted = stats
-                  .where((d) => (d.data() as Map)['status'] == 'wasted')
-                  .toList();
-
-              final used = stats
-                  .where((d) => (d.data() as Map)['status'] == 'used')
-                  .toList();
-
-              final currentExpired =
-              inventory.where((i) => i.isExpired).toList();
-
-              double totalWasted = 0;
-              for (var d in wasted) {
-                totalWasted += (d.data() as Map)['quantity'] ?? 1;
-              }
-
-              double totalUsed = 0;
-              for (var d in used) {
-                totalUsed += (d.data() as Map)['quantity'] ?? 1;
-              }
-
-              double expiredInFridge = 0;
-              for (var i in currentExpired) {
-                expiredInFridge += i.quantity;
-              }
-
-              double totalItems =
-                  totalUsed + totalWasted + expiredInFridge;
-
-              int wasteRate = (totalItems == 0)
-                  ? 0
-                  : (((totalWasted + expiredInFridge) / totalItems) * 100)
-                  .round();
-
-              Map<String, double> catWaste = {};
-
-              for (var d in wasted) {
-                String c =
-                    (d.data() as Map)['category'] ?? 'Others';
-                catWaste[c] =
-                    (catWaste[c] ?? 0) +
-                        ((d.data() as Map)['quantity'] ?? 1);
-              }
-
-              for (var i in currentExpired) {
-                catWaste[i.category] =
-                    (catWaste[i.category] ?? 0) + i.quantity;
-              }
-
-              DateTime now = DateTime.now();
-              DateTime lastMon =
-              now.subtract(Duration(days: now.weekday - 1));
-
-              List<BarChartGroupData> bars =
-              List.generate(7, (i) {
-                String dStr = lastMon
-                    .add(Duration(days: i))
-                    .toIso8601String()
-                    .split('T')[0];
-
-                double qty = 0;
-                for (var d in wasted) {
-                  if ((d.data() as Map)['date']
-                      .toString()
-                      .startsWith(dStr)) {
-                    qty +=
-                        (d.data() as Map)['quantity'] ?? 1;
-                  }
-                }
-
-                return BarChartGroupData(
-                  x: i,
-                  barRods: [
-                    BarChartRodData(
-                      toY: qty,
-                      color: Colors.green.shade700,
-                      width: 16,
-                      borderRadius:
-                      BorderRadius.circular(4),
-                    )
-                  ],
-                );
-              });
-
-              return Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.white,
-                      Colors.green.shade50,
-                    ],
-                  ),
-                ),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment:
-                    CrossAxisAlignment.start,
-                    children: [
-                      Card(
-                        child: Padding(
-                          padding:
-                          const EdgeInsets.all(20),
-                          child: Column(
-                            children: [
-                              const Text(
-                                'Overall Waste Rate',
-                                style: TextStyle(
-                                    fontWeight:
-                                    FontWeight.bold),
-                              ),
-                              Text(
-                                '$wasteRate%',
-                                style: TextStyle(
-                                  fontSize: 48,
-                                  fontWeight:
-                                  FontWeight.bold,
-                                  color: wasteRate > 20
-                                      ? Colors.orange
-                                      : Colors.green,
-                                ),
-                              ),
-                              const Text(
-                                'Includes wasted and current expired items.',
-                                style: TextStyle(
-                                  color:
-                                  Colors.black54,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 30),
-                      const Text(
-                        'Categories Wasted (Quantity)',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight:
-                          FontWeight.bold,
-                        ),
-                      ),
-                      if (catWaste.isNotEmpty)
-                        SizedBox(
-                          height: 200,
-                          child: PieChart(
-                            PieChartData(
-                              sections: catWaste.entries
-                                  .map(
-                                    (e) =>
-                                    PieChartSectionData(
-                                      value: e.value,
-                                      title:
-                                      '${e.key}\n(${e.value.toInt()})',
-                                      radius: 60,
-                                      color: Colors.primaries[
-                                      catWaste.keys
-                                          .toList()
-                                          .indexOf(
-                                          e.key) %
-                                          Colors
-                                              .primaries
-                                              .length],
-                                      titleStyle:
-                                      const TextStyle(
-                                        fontSize: 10,
-                                        color:
-                                        Colors.white,
-                                        fontWeight:
-                                        FontWeight
-                                            .bold,
-                                      ),
-                                    ),
-                              )
-                                  .toList(),
-                            ),
-                          ),
-                        )
-                      else
-                        const Padding(
-                          padding:
-                          EdgeInsets.all(20),
-                          child: Text(
-                            'Great! No waste data yet.',
-                          ),
-                        ),
-                      const SizedBox(height: 30),
-                      const Text(
-                        'Weekly Waste Trend (Monday Start)',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight:
-                          FontWeight.bold,
-                        ),
-                      ),
-                      SizedBox(
-                        height: 200,
-                        child: BarChart(
-                          BarChartData(
-                            barGroups: bars,
-                            borderData:
-                            FlBorderData(show: false),
-                            gridData:
-                            const FlGridData(show: false),
-                            titlesData: FlTitlesData(
-                              leftTitles:
-                              const AxisTitles(
-                                sideTitles:
-                                SideTitles(
-                                  showTitles: true,
-                                  reservedSize: 30,
-                                ),
-                              ),
-                              bottomTitles:
-                              AxisTitles(
-                                sideTitles:
-                                SideTitles(
-                                  showTitles: true,
-                                  getTitlesWidget:
-                                      (v, m) => Text(
-                                    ['M', 'T', 'W', 'T', 'F', 'S', 'S'][v.toInt() % 7],
-                                  ),
-                                ),
-                              ),
-                              topTitles:
-                              const AxisTitles(),
-                              rightTitles:
-                              const AxisTitles(),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        },
+      appBar: AppBar(title: const Text('Impact Analysis'), centerTitle: true, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: () => setState(() {}))]),
+      body: Container(
+        decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.white, Colors.green.shade50])),
+        child: StreamBuilder<QuerySnapshot>(stream: FirebaseService.getStats(), builder: (context, statsSnap) {
+          return StreamBuilder<List<GroceryItem>>(stream: FirebaseService.getItems(), builder: (context, invSnap) {
+            if (!statsSnap.hasData || !invSnap.hasData) return const Center(child: CircularProgressIndicator());
+            final stats = statsSnap.data!.docs, inventory = invSnap.data!;
+            final wasted = stats.where((d) => (d.data() as Map)['status'] == 'wasted').toList();
+            final used = stats.where((d) => (d.data() as Map)['status'] == 'used').toList();
+            final currentExpired = inventory.where((i) => i.isExpired).toList();
+            double totalWastedQty = 0; for (var d in wasted) totalWastedQty += (d.data() as Map)['quantity'] ?? 1;
+            double totalUsedQty = 0; for (var d in used) totalUsedQty += (d.data() as Map)['quantity'] ?? 1;
+            double expiredInFridge = 0; for (var i in currentExpired) expiredInFridge += i.quantity;
+            double currentFridgeTotal = inventory.fold(0, (sum, item) => sum + item.quantity);
+            double totalItemsHandled = totalUsedQty + totalWastedQty + currentFridgeTotal;
+            int wasteRate = (totalItemsHandled == 0) ? 0 : (((totalWastedQty + expiredInFridge) / totalItemsHandled) * 100).round();
+            Map<String, double> catWaste = {};
+            for (var d in wasted) { String c = (d.data() as Map)['category'] ?? 'Others'; catWaste[c] = (catWaste[c] ?? 0) + ((d.data() as Map)['quantity'] ?? 1).toDouble(); }
+            for (var i in currentExpired) { catWaste[i.category] = (catWaste[i.category] ?? 0) + i.quantity; }
+            DateTime now = DateTime.now(); DateTime lastMon = now.subtract(Duration(days: now.weekday - 1));
+            List<BarChartGroupData> bars = List.generate(7, (i) {
+              String dStr = lastMon.add(Duration(days: i)).toIso8601String().split('T')[0];
+              double qty = 0;
+              for (var d in wasted) if ((d.data() as Map)['date'].toString().startsWith(dStr)) qty += (d.data() as Map)['quantity'] ?? 1;
+              return BarChartGroupData(x: i, barRods: [BarChartRodData(toY: qty, color: Colors.green.shade700, width: 16, borderRadius: BorderRadius.circular(4))]);
+            });
+            return SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Card(child: Padding(padding: const EdgeInsets.all(20), child: Column(children: [const Text('Overall Waste Rate', style: TextStyle(fontWeight: FontWeight.bold)), Text('$wasteRate%', style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: wasteRate > 20 ? Colors.orange : Colors.green)), const Text('Wasted Items / Total Items Handled', style: TextStyle(color: Colors.black54, fontSize: 12))]))),
+              const SizedBox(height: 30),
+              const Text('Waste Distribution (Quantity)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              if (catWaste.isNotEmpty) SizedBox(height: 200, child: PieChart(PieChartData(sections: catWaste.entries.map((e) => PieChartSectionData(value: e.value, title: '${e.key}\n(${e.value.toInt()})', radius: 60, color: Colors.primaries[catWaste.keys.toList().indexOf(e.key) % Colors.primaries.length], titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold))).toList())))
+              else const Padding(padding: EdgeInsets.all(20), child: Text('Great! No waste data yet.')),
+              const SizedBox(height: 30),
+              const Text('Weekly Waste Trend (Monday Start)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              SizedBox(height: 200, child: BarChart(BarChartData(barGroups: bars, borderData: FlBorderData(show: false), gridData: const FlGridData(show: false), titlesData: FlTitlesData(leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30)), bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, m) => Text(['M','T','W','T','F','S','S'][v.toInt() % 7]))), topTitles: const AxisTitles(), rightTitles: const AxisTitles())))),
+            ]));
+          });
+        }),
       ),
     );
   }
@@ -564,6 +431,7 @@ class AddItemPage extends StatefulWidget {
 class _AddItemPageState extends State<AddItemPage> {
   late TextEditingController _name, _qty; String _cat = 'Vegetables'; late DateTime _expiry;
   final List<String> _cats = ['Fruits', 'Vegetables', 'Meat & Seafood', 'Dry/Wet Food', 'Others'];
+  final Map<String, String> _shelfLife = {'Fruits': '7-14 days', 'Vegetables': '3-7 days', 'Meat & Seafood': '1-3 days', 'Dry/Wet Food': '30-180 days', 'Others': 'Varies'};
   @override void initState() { super.initState(); _name = TextEditingController(text: widget.initialName); _qty = TextEditingController(text: '1'); _cat = _cats.contains(widget.initialCategory) ? widget.initialCategory : 'Vegetables'; _expiry = widget.initialExpiry ?? DateTime.now().add(const Duration(days: 7)); }
   @override Widget build(BuildContext context) {
     return Scaffold(
@@ -578,6 +446,7 @@ class _AddItemPageState extends State<AddItemPage> {
         TextField(controller: _qty, decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()), keyboardType: TextInputType.number),
         const SizedBox(height: 15),
         ListTile(title: const Text('Expiry Date'), subtitle: Text(_expiry.toString().split(' ')[0]), trailing: const Icon(Icons.calendar_today), tileColor: Colors.grey.shade50, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), onTap: () async { final d = await showDatePicker(context: context, initialDate: _expiry, firstDate: DateTime.now().subtract(const Duration(days: 30)), lastDate: DateTime.now().add(const Duration(days: 3650))); if (d != null) setState(() => _expiry = d); }),
+        Padding(padding: const EdgeInsets.only(left: 16, top: 8), child: Text('💡 Typical Shelf Life for $_cat: ${_shelfLife[_cat]}', style: const TextStyle(fontSize: 12, color: Colors.blueGrey, fontStyle: FontStyle.italic))),
         const Divider(height: 40),
         const Text('Recipes Preview:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
         Container(width: double.infinity, padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.green.shade100)), child: Text(LocalRecipeService.getRecipeSuggestions(_name.text), style: const TextStyle(fontSize: 13))),
