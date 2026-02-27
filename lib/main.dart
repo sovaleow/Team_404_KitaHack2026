@@ -27,19 +27,45 @@ class NotificationService {
 
   static Future<void> scheduleExpiryNotification(GroceryItem item) async {
     final now = DateTime.now();
-    final alertDate = item.expiryDate.subtract(const Duration(days: 2));
+
+    // FOR TESTING: Set alert to exactly 1 minute from this second
+    final alertDate = now.add(const Duration(minutes: 1));
+
     if (alertDate.isAfter(now)) {
       await _notifications.zonedSchedule(
         item.id.hashCode,
         'GrocerKu: Waste Alert! 🥗',
-        'Your ${item.name} is expiring in 2 days. Use it now to save food!',
-        tz.TZDateTime.from(alertDate, tz.local).add(const Duration(hours: 9)),
-        const NotificationDetails(android: AndroidNotificationDetails('expiry_channel', 'Expiry Alerts', importance: Importance.max, priority: Priority.high)),
+        'Testing: This is your 1-minute alert for ${item.name}!',
+        tz.TZDateTime.from(alertDate, tz.local), // Use alertDate directly
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'expiry_channel',
+            'Expiry Alerts',
+            importance: Importance.max,
+            priority: Priority.high,
+            showWhen: true,
+          ),
+        ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
       );
     }
   }
+  // static Future<void> scheduleExpiryNotification(GroceryItem item) async {
+  //   final now = DateTime.now();
+  //   final alertDate = item.expiryDate.subtract(const Duration(minutes: 1));
+  //   if (alertDate.isAfter(now)) {
+  //     await _notifications.zonedSchedule(
+  //       item.id.hashCode,
+  //       'GrocerKu: Waste Alert! 🥗',
+  //       'Your ${item.name} is expiring in 2 days. Use it now to save food!',
+  //       tz.TZDateTime.from(alertDate, tz.local).add(const Duration(hours: 9)),
+  //       const NotificationDetails(android: AndroidNotificationDetails('expiry_channel', 'Expiry Alerts', importance: Importance.max, priority: Priority.high)),
+  //       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+  //       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+  //     );
+  //   }
+  // }
 
   static Future<void> cancelNotifications(String id) async => await _notifications.cancel(id.hashCode);
 }
