@@ -25,12 +25,12 @@ class NotificationService {
   }
   static Future<void> scheduleExpiryNotification(GroceryItem item) async {
     // Demo mode: Schedule notification 1 minute from now
-    final scheduledTime = tz.TZDateTime.now(tz.local).add(const Duration(minutes: 1));
+    final scheduledTime = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 15));
     
     await _notifications.zonedSchedule(
       item.id.hashCode, 
-      'GrocerKu Demo Alert! 🥗', 
-      'Demo: Your ${item.name} is expiring soon (Scheduled 1m ago).', 
+      'GrocerKu Alert! 🥗',
+      'Your ${item.name} is expiring soon.',
       scheduledTime, 
       const NotificationDetails(
         android: AndroidNotificationDetails(
