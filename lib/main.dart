@@ -25,7 +25,7 @@ class NotificationService {
   }
   static Future<void> scheduleExpiryNotification(GroceryItem item) async {
     // Demo mode: Schedule notification 1 minute from now
-    final scheduledTime = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 5));
+    final scheduledTime = tz.TZDateTime.now(tz.local).add(const Duration(days: 2));
     
     await _notifications.zonedSchedule(
       item.id.hashCode, 
