@@ -49,6 +49,13 @@ Running both OCR and Image Labeling on a single camera snapshot required careful
 
 ---
 
+## 🔮 Future Roadmap
+
+*   **AI Culinary Assistant**: Re-integrating stable Gemini API models to provide personalized recipe suggestions based on "soon-to-expire" items in the user's inventory.
+*   **Gamified Sustainability**: Introducing a reward system with badges and levels (e.g., "Zero-Waste Hero") to incentivize consistent food tracking and waste reduction.
+
+---
+
 ## 📦 Getting Started
 
 1.  **Clone the repo**: `git clone [repository-url]`
