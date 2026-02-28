@@ -25,7 +25,7 @@ class NotificationService {
   }
   static Future<void> scheduleExpiryNotification(GroceryItem item) async {
     // Demo mode: Schedule notification 1 minute from now
-    final scheduledTime = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 15));
+    final scheduledTime = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 5));
     
     await _notifications.zonedSchedule(
       item.id.hashCode, 
@@ -58,7 +58,7 @@ class KitaHackApp extends StatelessWidget {
   const KitaHackApp({super.key});
   @override Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'GrocerKu with KitaHack 2026',
+      title: 'GrocerKu',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.green, primary: Colors.green.shade800), useMaterial3: true, cardTheme: CardThemeData(elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)))),
       home: const AuthWrapper(),
@@ -101,7 +101,6 @@ class _LoginPageState extends State<LoginPage> {
         const Icon(Icons.eco_rounded, size: 80, color: Colors.green),
         const SizedBox(height: 10),
         const Text('GrocerKu', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.green)),
-        const Text('with KitaHack 2026', style: TextStyle(color: Colors.black54, letterSpacing: 1.2)),
         const SizedBox(height: 40),
         TextField(controller: _email, decoration: InputDecoration(labelText: 'Email', prefixIcon: const Icon(Icons.email_outlined), filled: true, fillColor: Colors.white.withOpacity(0.8), border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none))),
         const SizedBox(height: 12),
@@ -164,7 +163,7 @@ class FirebaseService {
   static Future<void> updateItem(String id, Map<String, dynamic> data) async => await _db.collection('users').doc(_uid).collection('inventory').doc(id).update(data);
   static Future<void> deleteItem(String id) async { await NotificationService.cancelNotifications(id); await _db.collection('users').doc(_uid).collection('inventory').doc(id).delete(); }
   static Future<void> completeItem(GroceryItem i) async { await _db.collection('users').doc(_uid).collection('stats').add({'name': i.name, 'date': DateTime.now().toIso8601String(), 'category': i.category, 'status': 'used', 'quantity': i.quantity}); await deleteItem(i.id); }
-  static Future<void> markAsWasted(GroceryItem i) async { await _db.collection('users').doc(_uid).collection('stats').add({'name': i.name, 'date': DateTime.now().toIso8601String(), 'category': i.category, 'status': 'wasted', 'quantity': i.quantity}); await deleteItem(i.id); }
+  static Future<void> markAsWasted(GroceryItem i) async { await _db.collection('users').doc(_uid).collection('stats').add({'name': i.name, 'date': i.expiryDate.toIso8601String(), 'category': i.category, 'status': 'wasted', 'quantity': i.quantity}); await deleteItem(i.id); }
   static Stream<QuerySnapshot> getStats() => _db.collection('users').doc(_uid).collection('stats').snapshots();
 
   static Stream<List<Post>> getPosts() => _db.collection('community').orderBy('timestamp', descending: true).snapshots().map((s) => s.docs.map((d) => Post.fromDoc(d)).toList());
@@ -345,6 +344,7 @@ class StatsPage extends StatelessWidget {
         double totalUsedQty = 0; for (var d in used) totalUsedQty += (d.data() as Map)['quantity'] ?? 1;
         double expiredInFridge = 0; for (var i in currentExpired) expiredInFridge += i.quantity;
         
+        // Corrected Waste Rate Logic: Wasted vs Total Managed
         double totalVolume = totalUsedQty + totalWastedQty + expiredInFridge;
         int wasteRate = totalVolume == 0 ? 0 : (((totalWastedQty + expiredInFridge) / totalVolume) * 100).round();
         
@@ -360,6 +360,7 @@ class StatsPage extends StatelessWidget {
         });
         
         return Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.white, Colors.green.shade50])), child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(children: [
+          // Centered Overall Waste Rate
           const SizedBox(height: 20),
           const Text('Overall Waste Rate', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 10),
@@ -368,6 +369,7 @@ class StatsPage extends StatelessWidget {
           
           const SizedBox(height: 40),
           
+          // Pie Chart Section
           const Align(alignment: Alignment.centerLeft, child: Text('Waste Distribution (Quantity)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
           const SizedBox(height: 20),
           if (catWaste.isNotEmpty) 
@@ -377,6 +379,7 @@ class StatsPage extends StatelessWidget {
 
           const SizedBox(height: 40),
           
+          // Weekly Trend Section
           const Align(alignment: Alignment.centerLeft, child: Text('Weekly Waste Trend', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
           const SizedBox(height: 20),
           SizedBox(height: 200, child: BarChart(BarChartData(barGroups: bars, borderData: FlBorderData(show: false), gridData: const FlGridData(show: false), titlesData: FlTitlesData(leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30)), bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, m) => Text(['M','T','W','T','F','S','S'][v.toInt() % 7]))), topTitles: const AxisTitles(), rightTitles: const AxisTitles())))),
